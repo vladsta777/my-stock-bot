@@ -1,7 +1,6 @@
-yfinance
-requests
 pyTelegramBotAPI
+yfinance
 flask
-waitress
+requests
 pandas
 lxml
