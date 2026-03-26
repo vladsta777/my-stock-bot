@@ -4,15 +4,18 @@ import pandas as pd
 import os
 from flask import Flask
 from threading import Thread
+from waitress import serve  # Импорт продакшн-сервера
 
 # 1. Мини-сервер
 app = Flask('')
 @app.route('/')
-def home(): return "Market Bot is Running"
+def home(): 
+    return "Market Bot is Running"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    # Используем Waitress вместо app.run для стабильности на Render
+    serve(app, host='0.0.0.0', port=port)
 
 # 2. Настройка бота
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -27,7 +30,9 @@ def get_market_data(category):
             "low": "https://finance.yahoo.com/markets/stocks/52-week-lows/"
         }
         
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        
+        # Читаем таблицу с Yahoo
         dfs = pd.read_html(urls[category], storage_options=headers)
         df = dfs[0].head(10)
 
@@ -37,11 +42,13 @@ def get_market_data(category):
             price = row['Price']
             change = row.get('% Change', row.get('Change', 'N/A'))
             
-            # Создаем ссылку на профиль акции
+            # Ссылка на профиль акции
             yahoo_link = f"https://finance.yahoo.com/quote/{ticker}"
             
+            # Эмодзи в зависимости от категории
             emoji = "🟢" if category in ["gainers", "high"] else "🔴"
-            # Делаем тикер кликабельным (через HTML)
+            
+            # Формируем строку с кликабельным тикером
             lines.append(f"{emoji} <a href='{yahoo_link}'>{ticker:5}</a> | <b>${price}</b> (<code>{change}</code>)")
 
         titles = {
@@ -54,27 +61,26 @@ def get_market_data(category):
         return f"{titles[category]}\n\n" + "\n".join(lines)
 
     except Exception as e:
-        print(f"Error: {e}")
-        return "❌ <i>Данные временно недоступны.</i>"
+        print(f"Error fetching data: {e}")
+        return "❌ <i>Данные временно недоступны (Yahoo обновил структуру). Попробуйте позже.</i>"
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    # Новые названия кнопок
+    # Новые названия кнопок, как ты просил
     markup.row("🚀 Top Gainers", "📉 Top Losers")
     markup.row("📈 52 Week Gainers", "🧊 52 Week Losers")
     
     bot.send_message(
         message.chat.id, 
-        "📊 <b>Market Terminal v3.5</b>\nНажмите на тикер для перехода в Yahoo Finance:", 
+        "📊 <b>Market Terminal v3.6</b>\n\nНажмите на тикер для перехода в Yahoo Finance:", 
         parse_mode="HTML", 
         reply_markup=markup,
-        disable_web_page_preview=True # Чтобы не плодить кучу превью ссылок
+        disable_web_page_preview=True
     )
 
 @bot.message_handler(func=lambda m: True)
 def handle_menu(message):
-    # Обновленный маппинг под новые названия
     mapping = {
         "🚀 Top Gainers": "gainers",
         "📉 Top Losers": "losers",
@@ -90,5 +96,11 @@ def handle_menu(message):
         bot.send_message(message.chat.id, response, parse_mode="HTML", disable_web_page_preview=True)
 
 if __name__ == "__main__":
-    Thread(target=run_flask).start()
-    bot.infinity_polling(non_stop=True)
+    # Запуск сервера
+    t = Thread(target=run_flask)
+    t.setDaemon(True) # Поток умрет при выходе из программы
+    t.start()
+    
+    print("Продакшн-сервер (Waitress) активен...")
+    # Запуск бота с пропуском старых сообщений
+    bot.infinity_polling(non_stop=True, skip_pending=True)
