@@ -7,162 +7,113 @@ from flask import Flask
 from threading import Thread
 from waitress import serve
 import logging
+import re
 from datetime import datetime
 
 # 1. Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 2. Мини-сервер для UptimeRobot
+# 2. Мини-сервер
 app = Flask('')
-
 @app.route('/')
-def home():
-    return "Market Bot is Active and Healthy", 200
+def home(): return "Market Bot is Active", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    logger.info(f"Запуск веб-сервера на порту {port}")
     serve(app, host='0.0.0.0', port=port)
 
 # 3. Настройка бота
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
-# --- СПИСКИ ДЛЯ ОБЗОРА ---
 DIGEST_TICKERS = {
-    "Crude Oil": "CL=F",
-    "Natural Gas": "NG=F",
-    "Gold": "GC=F",
-    "Dow Jones": "YM=F",
-    "S&P 500": "ES=F",
-    "Nasdaq 100": "NQ=F",
-    "Russell 2000": "RTY=F"
+    "Crude Oil": "CL=F", "Natural Gas": "NG=F", "Gold": "GC=F",
+    "Dow Jones": "YM=F", "S&P 500": "ES=F", "Nasdaq 100": "NQ=F", "Russell 2000": "RTY=F"
 }
 
-# --- ФУНКЦИИ ДАННЫХ ---
+# --- ФУНКЦИИ ---
 
 def get_daily_digest():
-    """Сводка по рынкам с актуальной макроэкономикой 2026"""
     try:
         lines = [f"📅 <b>Обзор рынка на {datetime.now().strftime('%d.%m.%Y')}</b>\n"]
         lines.append("📊 <b>Фьючерсы и Индексы:</b>")
-        
         for name, ticker in DIGEST_TICKERS.items():
             try:
                 t = yf.Ticker(ticker)
-                hist = t.history(period="5d")
-                if not hist.empty and len(hist) >= 2:
+                hist = t.history(period="2d")
+                if not hist.empty:
                     price = hist['Close'].iloc[-1]
-                    prev_price = hist['Close'].iloc[-2]
-                    change = ((price - prev_price) / prev_price) * 100
+                    change = ((price - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
                     emoji = "🟢" if change >= 0 else "🔴"
-                    change_str = f"<code>{change:+.2f}%</code>"
-                    p_val = f"{price:.2f}"
-                    lines.append(f"{emoji} <a href='https://finance.yahoo.com/quote/{ticker}'>{name:12}</a>: <b>{p_val}</b> ({change_str})")
+                    lines.append(f"{emoji} <a href='https://finance.yahoo.com/quote/{ticker}'>{name:12}</a>: <b>{price:.2f}</b> (<code>{change:+.2f}%</code>)")
             except: continue
         
         lines.append("\n🗓 <b>Ключевые события (NY Time):</b>")
-        lines.append("• <b>Ставка ФРС:</b> 29.04 | <i>Тек: 3.75%</i>")
-        lines.append("• <b>CPI (Инфляция):</b> 15.04 | <i>Тек: 2.4%</i>")
-        
+        lines.append("• <b>Ставка ФРС:</b> 29.04 | <i>Тек: 3.75% (18.03)</i>")
+        lines.append("• <b>CPI (Инфляция):</b> 15.04 | <i>Тек: 2.4% (12.03)</i>")
+        lines.append("• <b>NFP/Безработица:</b> 03.04 | <i>Тек: 4.4% (06.03)</i>")
         return "\n".join(lines)
-    except Exception as e:
-        logger.error(f"Digest error: {e}")
-        return "❌ Ошибка загрузки дайджеста."
+    except: return "❌ Ошибка загрузки дайджеста."
 
 def get_ticker_info(ticker_symbol):
-    """Математический скоринг на основе цифр отчета и тех. данных"""
     try:
         ticker_symbol = ticker_symbol.upper().strip()
         stock = yf.Ticker(ticker_symbol)
         info = stock.info
+        if not info or 'currentPrice' not in info: return None
+
+        # Расчет ATR (упрощенно за 14 дней)
+        hist = stock.history(period="20d")
+        atr = (hist['High'] - hist['Low']).mean() if len(hist) > 0 else 0
+
+        # Данные по Earnings
+        calendar = stock.calendar
+        next_report = "N/A"
+        if calendar and 'Earnings Date' in calendar:
+            next_report = calendar['Earnings Date'][0].strftime('%d.%m')
         
-        if not info or ('regularMarketPrice' not in info and 'currentPrice' not in info):
-            return None
+        # Последний отчет (условно берем из истории или info)
+        last_eps = info.get('trailingEps', 'N/A')
 
-        # --- 1. СБОР ПОКАЗАТЕЛЕЙ ---
-        price = info.get('currentPrice') or info.get('regularMarketPrice')
-        change = info.get('regularMarketChangePercent', 0) or 0
-        rev_growth = info.get('revenueGrowth', 0) or 0
-        eps_growth = info.get('earningsGrowth', 0) or 0
-        debt_to_eq = info.get('debtToEquity', 150) or 150
-        margin = info.get('profitMargins', 0) or 0
-        vol_ratio = (info.get('volume', 0) / info.get('averageVolume', 1)) if info.get('averageVolume') else 1
-
-        # --- 2. МАТЕМАТИЧЕСКИЙ РАСЧЕТ БАЛЛОВ (Max 10) ---
-        score = 0
-        calc_steps = []
-
-        # Выручка (Вес 3)
-        if rev_growth > 0.20: 
-            score += 3
-            calc_steps.append(f"📈 Выручка > 20% ({rev_growth*100:.1f}%) [+3]")
-        elif rev_growth > 0.05:
-            score += 1
-            calc_steps.append(f"✅ Рост выручки ({rev_growth*100:.1f}%) [+1]")
-        else:
-            score -= 2
-            calc_steps.append(f"❌ Слабая выручка ({rev_growth*100:.1f}%) [-2]")
-
-        # Прибыль (Вес 3)
-        if eps_growth > 0.10:
-            score += 3
-            calc_steps.append(f"💰 Прибыль растет ({eps_growth*100:.1f}%) [+3]")
-        elif eps_growth < 0:
-            score -= 2
-            calc_steps.append(f"⚠️ Убыточный квартал ({eps_growth*100:.1f}%) [-2]")
-
-        # Долг (Вес 2)
-        if debt_to_eq < 80:
-            score += 2
-            calc_steps.append(f"🛡 Долг низкий ({debt_to_eq:.1f}) [+2]")
-        elif debt_to_eq > 160:
-            score -= 2
-            calc_steps.append(f"🔴 Высокий долг ({debt_to_eq:.1f}) [-2]")
-
-        # Техника/Объем (Вес 2)
-        if vol_ratio > 1.3:
-            score += 2
-            calc_steps.append(f"📊 Аномальный объем ({vol_ratio:.2f}x) [+2]")
-
-        # --- 3. ФИНАЛЬНОЕ РЕШЕНИЕ ---
-        if score >= 6: verdict, reason = "🟢 STRONG LONG", "Фундаментал сильный, риск низкий."
-        elif score >= 2: verdict, reason = "🟡 NEUTRAL / HOLD", "Смешанные цифры, ждем подтверждения."
-        else: verdict, reason = "🔴 STRONG SHORT", "Бизнес деградирует или перегружен долгами."
-
-        # Формирование отчета
-        emoji = "🟢" if change >= 0 else "🔴"
         text = (
             f"🔍 <b>{info.get('longName', ticker_symbol)} ({ticker_symbol})</b>\n"
-            f"💰 Цена: <b>{price} {info.get('currency', 'USD')}</b> ({emoji} <code>{change:+.2f}%</code>)\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚖️ <b>РАСЧЕТ ЛОГИКИ (Score: {score}/10):</b>\n"
-            f"{chr(10).join(calc_steps)}\n"
+            f"💰 Price: <b>{info.get('currentPrice')} {info.get('currency', 'USD')}</b>\n"
+            f"📊 Volume: <b>{info.get('volume', 0):,}</b>\n"
+            f"📈 Avg Vol: <b>{info.get('averageVolume', 0):,}</b>\n"
+            f"🎈 Float: <b>{info.get('floatShares', 0)/1e6:.2f}M</b>\n"
+            f"🏢 Market Cap: <b>{info.get('marketCap', 0)/1e9:.2f}B</b>\n"
+            f"📏 ATR: <b>{atr:.2f}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 <b>РЕШЕНИЕ: {verdict}</b>\n"
-            f"🧠 <i>{reason}</i>\n"
+            f"📅 <b>EARNINGS:</b>\n"
+            f"• Ожидаем: <b>{next_report}</b> | Тек: <b>{last_eps} (last)</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📑 <b>ПОДРОБНЫЕ ДАННЫЕ (нажми):</b>\n"
-            f"<tg-spoiler>• Rev Growth: {rev_growth:.2%}\n• EPS Growth: {eps_growth:.2%}\n• Debt/Equity: {debt_to_eq}\n• Profit Margin: {margin:.2%}\n• Short Float: {info.get('shortPercentOfFloat', 0)*100:.2f}%</tg-spoiler>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🔗 <a href='https://finance.yahoo.com/quote/{ticker_symbol}'>Yahoo Finance Terminal</a>"
+            f"🔗 <a href='https://finance.yahoo.com/quote/{ticker_symbol}'>Open in Yahoo</a>"
         )
         return text
-    except Exception as e:
-        logger.error(f"Scoring error: {e}")
-        return None
+    except: return None
 
 def get_market_data(category):
     try:
-        urls = {"gainers": "https://finance.yahoo.com/markets/stocks/gainers/", 
-                "losers": "https://finance.yahoo.com/markets/stocks/losers/"}
+        url = f"https://finance.yahoo.com/markets/stocks/{category}/"
         headers = {"User-Agent": "Mozilla/5.0"}
-        dfs = pd.read_html(urls[category], storage_options=headers)
+        dfs = pd.read_html(url, storage_options=headers)
         df = dfs[0].head(10)
-        lines = [f"{ticker:5} | ${price} ({change})" for ticker, price, change in zip(df['Symbol'], df['Price'], df.get('% Change', df.get('Change', '')))]
-        return f"📊 <b>{category.upper()}</b>\n\n" + "\n".join(lines)
+        
+        emoji = "🟢" if category == "gainers" else "🔴"
+        lines = [f"📊 <b>TOP {category.upper()}:</b>\n"]
+        
+        for _, row in df.iterrows():
+            sym = row['Symbol']
+            price = row['Price']
+            chg = row.get('% Change', row.get('Change', '0%'))
+            lines.append(f"{emoji} <a href='https://finance.yahoo.com/quote/{sym}'>{sym:5}</a> | <b>${price}</b> (<code>{chg}</code>)")
+        
+        return "\n".join(lines)
     except: return "❌ Ошибка данных."
+
+# --- ОБРАБОТКА ---
 
 def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -172,25 +123,27 @@ def get_main_menu():
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v7.0</b>\nМатематический анализ отчетов активен.", 
-                     parse_mode="HTML", reply_markup=get_main_menu())
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v8.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
-def handle_menu(message):
-    if message.text == "📰 Обзор на сегодня":
+def handle_all_messages(message):
+    text = message.text
+    
+    if text == "📰 Обзор на сегодня":
         bot.send_message(message.chat.id, get_daily_digest(), parse_mode="HTML", disable_web_page_preview=True)
-    elif message.text == "🔍 Поиск по тикеру":
-        msg = bot.send_message(message.chat.id, "✍️ Введите тикер (напр. TSLA):", parse_mode="HTML")
-        bot.register_next_step_handler(msg, process_ticker_step)
-    elif "Top" in message.text:
-        cat = "gainers" if "Gainers" in message.text else "losers"
-        bot.send_message(message.chat.id, get_market_data(cat), parse_mode="HTML")
-
-def process_ticker_step(message):
-    ticker = message.text.upper().strip()
-    res = get_ticker_info(ticker)
-    if res: bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
-    else: bot.send_message(message.chat.id, f"❌ Тикер {ticker} не найден.")
+    
+    elif text == "🔍 Поиск по тикеру":
+        bot.send_message(message.chat.id, "✍️ Введите тикер (например, AAPL):")
+    
+    elif "Top" in text:
+        cat = "gainers" if "Gainers" in text else "losers"
+        bot.send_message(message.chat.id, get_market_data(cat), parse_mode="HTML", disable_web_page_preview=True)
+    
+    # Логика: если сообщение похоже на тикер (1-5 букв), обрабатываем сразу
+    elif re.fullmatch(r'[A-Za-z]{1,5}', text):
+        res = get_ticker_info(text)
+        if res: bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
+        else: bot.send_message(message.chat.id, "❌ Тикер не найден.")
 
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
