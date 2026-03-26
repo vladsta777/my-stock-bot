@@ -35,11 +35,13 @@ DIGEST_TICKERS = {
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
 def format_volume(volume):
-    """Превращает 2204000 в 2.2M, а 301801 в 301K"""
+    """Превращает 2204000 в 2.2M, а 301801 в 301K. Исправлено для очистки всех спецсимволов."""
     try:
-        # Очищаем строку от запятых и лишних символов, чтобы корректно перевести в число
-        val_str = re.sub(r'[^\d.]', '', str(volume))
-        val = float(val_str)
+        # Убираем запятые, пробелы и любые нечисловые символы, кроме точки
+        clean_val = re.sub(r'[^\d.]', '', str(volume))
+        if not clean_val: return str(volume)
+        
+        val = float(clean_val)
         if val >= 1_000_000:
             return f"{val/1_000_000:.1f}M"
         if val >= 1_000:
@@ -154,21 +156,18 @@ def send_market_data(message, category):
         for _, row in df.iterrows():
             sym = str(row['Symbol'])
             
-            # Извлекаем цену, убирая всё лишнее после первого числа
+            # 1. Извлекаем цену
             price_raw = str(row['Price']).split('+')[0].split('-')[0].replace('$', '').strip()
             
-            # Ищем изменение (доллары + проценты в скобках) во всей строке данных
-            # Это исключает появление нулей, если Yahoo переставил колонки
+            # 2. Ищем изменение во всей строке (защита от сдвига колонок)
             full_row_str = " ".join(map(str, row.values))
             change_match = re.search(r'([+-]\d+\.\d+\s\([+-]?\d+\.?\d*%\))', full_row_str)
             change_display = change_match.group(1) if change_match else "0.00 (0%)"
             
-            # Форматируем объем (теперь миллионы будут с буквой M)
+            # 3. Форматируем объем (теперь чистит запятые)
             vol_formatted = format_volume(row.get('Volume', '-'))
             
             emoji = "🟢" if is_gainers else "🔴"
-            
-            # Финальная строка кнопки
             btn_text = f"{emoji} {sym:5} | ${price_raw} {change_display} | Vol: {vol_formatted}"
             
             btn = types.InlineKeyboardButton(btn_text, callback_data=f"t_info_{sym}")
@@ -216,5 +215,10 @@ def handle_all_messages(message):
         else: bot.send_message(message.chat.id, "❌ Тикер не найден.")
 
 if __name__ == "__main__":
-    Thread(target=run_flask, daemon=True).start()
-    bot.infinity_polling()
+    # Запуск Flask в отдельном потоке (критично для Render)
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    logger.info("Бот запускается...")
+    # Стабильный цикл polling для серверов
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
