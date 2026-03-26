@@ -61,28 +61,41 @@ def get_ticker_info(ticker_symbol):
         ticker_symbol = ticker_symbol.upper().strip()
         stock = yf.Ticker(ticker_symbol)
         info = stock.info
-        if not info or 'currentPrice' not in info: return None
+        if not info or ('currentPrice' not in info and 'regularMarketPrice' not in info): return None
 
         # Расчет изменения за день (%)
         day_change = info.get('regularMarketChangePercent', 0)
         change_emoji = "🟢" if day_change >= 0 else "🔴"
 
-        # Расчет ATR (упрощенно за 14 дней)
+        # Расчет ATR (за 14 дней)
         hist = stock.history(period="20d")
         atr = (hist['High'] - hist['Low']).tail(14).mean() if len(hist) > 0 else 0
 
-        # Данные по Earnings
+        # --- ЛОГИКА EARNINGS ---
         calendar = stock.calendar
         next_report = "N/A"
         if calendar and 'Earnings Date' in calendar:
             next_report = calendar['Earnings Date'][0].strftime('%d.%m')
         
-        last_eps = info.get('trailingEps', 'N/A')
+        # 1. Текущий прогноз
+        forecast = info.get('earningsEstimateNextQuarter') or "N/A"
+        forecast_str = f"{forecast:.2f}" if isinstance(forecast, (int, float)) else "N/A"
+
+        # 2. Прошлый результат (Факт из истории или trailingEps)
+        prev_actual_str = "N/A"
+        try:
+            earn_hist = stock.earnings_history
+            if not earn_hist.empty:
+                last_row = earn_hist.dropna(subset=['EPS Actual']).iloc[-1]
+                prev_actual_str = f"{last_row['EPS Actual']:.2f}"
+        except:
+            prev_actual = info.get('trailingEps', "N/A")
+            prev_actual_str = f"{prev_actual:.2f}" if isinstance(prev_actual, (int, float)) else "N/A"
 
         text = (
             f"🔍 <b>{info.get('longName', ticker_symbol)} ({ticker_symbol})</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 Price: <b>{info.get('currentPrice')} {info.get('currency', 'USD')}</b> | {change_emoji} <b>{day_change:+.2f}%</b>\n"
+            f"💰 Price: <b>{info.get('currentPrice') or info.get('regularMarketPrice')} {info.get('currency', 'USD')}</b> | {change_emoji} <b>{day_change:+.2f}%</b>\n"
             f"📊 Volume: <b>{info.get('volume', 0):,}</b>\n"
             f"📈 Avg Vol: <b>{info.get('averageVolume', 0):,}</b>\n"
             f"🎈 Float: <b>{info.get('floatShares', 0)/1e6:.2f}M</b>\n"
@@ -90,7 +103,7 @@ def get_ticker_info(ticker_symbol):
             f"📏 ATR: <b>{atr:.2f}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📅 <b>EARNINGS:</b>\n"
-            f"• Ожидаем: <b>{next_report}</b> | Тек: <b>{last_eps} (last)</b>\n"
+            f"• Ожидаем: <b>{next_report}</b> | Прогноз: <b>{forecast_str}</b> (Прошлый факт: <b>{prev_actual_str}</b>)\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🔗 <a href='https://finance.yahoo.com/quote/{ticker_symbol}'>Open in Yahoo</a>"
         )
