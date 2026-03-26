@@ -31,6 +31,13 @@ def run_flask():
     logger.info(f"Запуск Flask-сервера на порту {port}...")
     serve(app, host='0.0.0.0', port=port, threads=4)
 
+# --- ИНИЦИАЛИЗАЦИЯ СЕССИИ ДЛЯ ОБХОДА БЛОКИРОВОК ---
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+})
+
 # 3. Настройка бота
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TOKEN)
@@ -63,7 +70,7 @@ def get_daily_digest():
         lines.append("📊 <b>Фьючерсы и Индексы:</b>")
         for name, ticker in DIGEST_TICKERS.items():
             try:
-                t = yf.Ticker(ticker)
+                t = yf.Ticker(ticker, session=session)
                 hist = t.history(period="2d")
                 if not hist.empty:
                     price = hist['Close'].iloc[-1]
@@ -86,14 +93,34 @@ def get_ticker_info(ticker_symbol):
     try:
         ticker_symbol = ticker_symbol.upper().strip()
         logger.info(f"Запрос данных по тикеру: {ticker_symbol}")
-        stock = yf.Ticker(ticker_symbol)
-        info = stock.info
-        if not info or ('currentPrice' not in info and 'regularMarketPrice' not in info):
-            logger.warning(f"Тикер {ticker_symbol} не найден.")
-            return None
+        stock = yf.Ticker(ticker_symbol, session=session)
+        
+        # Попытка получить info. Если Rate Limited, пробуем fast_info
+        try:
+            info = stock.info
+        except:
+            info = None
 
-        day_change = info.get('regularMarketChangePercent', 0)
+        # Запасной вариант, если info заблокирован
+        if not info or not (info.get('currentPrice') or info.get('regularMarketPrice')):
+            logger.warning(f"Yahoo ограничил доступ к .info для {ticker_symbol}. Использую fast_info.")
+            fast = stock.fast_info
+            price = fast.get('last_price')
+            if not price: return None
+            
+            # Собираем минимальный набор данных из быстрого доступа
+            info = {
+                'currentPrice': price,
+                'currency': fast.get('currency', 'USD'),
+                'longName': ticker_symbol,
+                'regularMarketChangePercent': fast.get('day_change_percent', 0),
+                'volume': fast.get('last_volume', 0),
+                'marketCap': fast.get('market_cap', 0)
+            }
+
+        day_change = info.get('regularMarketChangePercent', 0) or 0
         change_emoji = "🟢" if day_change >= 0 else "🔴"
+        
         hist = stock.history(period="20d")
         atr = (hist['High'] - hist['Low']).tail(14).mean() if len(hist) > 0 else 0
 
@@ -115,12 +142,11 @@ def get_ticker_info(ticker_symbol):
             prev_actual = info.get('trailingEps', "N/A")
             prev_actual_str = f"{prev_actual:.2f}" if isinstance(prev_actual, (int, float)) else "N/A"
 
-        # MarketWatch News
+        # News MarketWatch
         news_lines = ["🗞 <b>MarketWatch News:</b>"]
         try:
             mw_url = f"https://www.marketwatch.com/investing/stock/{ticker_symbol}"
-            mw_headers = {"User-Agent": "Mozilla/5.0"}
-            resp = requests.get(mw_url, headers=mw_headers, timeout=5)
+            resp = requests.get(mw_url, headers=session.headers, timeout=5)
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, 'html.parser')
                 headlines = soup.find_all('h3', class_='article__headline', limit=3)
@@ -164,8 +190,7 @@ def send_market_data(message, category):
     try:
         logger.info(f"Запрос категории: {category}")
         url = f"https://finance.yahoo.com/markets/stocks/{category}/"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        dfs = pd.read_html(url, storage_options=headers)
+        dfs = pd.read_html(url, storage_options={'User-Agent': session.headers['User-Agent']})
         df = dfs[0].head(10)
         
         is_gainers = category == "gainers"
@@ -246,7 +271,6 @@ if __name__ == "__main__":
         try:
             logger.info("Бот запускает polling...")
             bot.remove_webhook()
-            # skip_pending=True решает проблему с "зависшим" первым сообщением
             bot.infinity_polling(timeout=80, long_polling_timeout=40, skip_pending=True)
         except Exception as e:
             logger.error(f"Критическая ошибка polling: {e}. Рестарт через 5 сек.")
