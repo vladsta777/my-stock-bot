@@ -93,7 +93,7 @@ def get_ticker_info(ticker_symbol):
         try:
             news = stock.news
             if news and len(news) > 0:
-                for item in news[:3]: # Берем 3 новости
+                for item in news[:3]:
                     n_title = item.get('title', 'Новость без заголовка')
                     n_link = item.get('link', '#')
                     news_lines.append(f"• <a href='{n_link}'>{n_title}</a>")
@@ -132,27 +132,31 @@ def send_market_data(message, category):
         dfs = pd.read_html(url, storage_options=headers)
         df = dfs[0].head(10)
         
-        title = f"📊 <b>TOP {category.upper()}:</b>\n<i>Нажми для быстрого анализа:</i>"
+        is_gainers = category == "gainers"
+        cat_label = "GAINERS 🚀" if is_gainers else "LOSERS 📉"
+        title = f"📊 <b>TOP {cat_label}:</b>\n<i>Нажми для быстрого анализа:</i>"
         
         markup = types.InlineKeyboardMarkup(row_width=1)
         
         for _, row in df.iterrows():
             sym = row['Symbol']
             price = row['Price']
-            chg = row.get('% Change', row.get('Change', '0%'))
+            # Используем только % Change для чистоты данных на кнопке
+            chg_pct = row.get('% Change', '0%')
             vol = row.get('Volume', '-')
             
-            # Эмодзи направления
-            emoji = "🟢" if "-" not in str(chg) else "🔴"
+            # Эмодзи направления (зеленый для Gainers, красный для Losers)
+            emoji = "🟢" if is_gainers else "🔴"
             
-            # Текст кнопки: Тикер | Цена | Изменение | Объем
-            btn_text = f"{emoji} {sym:5} | ${price} | {chg} | Vol: {vol}"
+            # Текст кнопки: Тикер | Цена | Процент | Объем
+            btn_text = f"{emoji} {sym:5} | ${price} | {chg_pct} | Vol: {vol}"
             
             btn = types.InlineKeyboardButton(btn_text, callback_data=f"t_info_{sym}")
             markup.add(btn)
         
         bot.send_message(message.chat.id, title, parse_mode="HTML", reply_markup=markup)
-    except:
+    except Exception as e:
+        logger.error(f"Market data error: {e}")
         bot.send_message(message.chat.id, "❌ Ошибка данных.")
 
 # --- ОБРАБОТКА ---
@@ -174,22 +178,18 @@ def handle_ticker_callback(call):
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v13.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v14.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
     text = message.text
-    
     if text == "📰 Обзор на сегодня":
         bot.send_message(message.chat.id, get_daily_digest(), parse_mode="HTML", disable_web_page_preview=True)
-    
     elif text == "🔍 Поиск по тикеру":
         bot.send_message(message.chat.id, "✍️ Введите тикер (например, AAPL):")
-    
     elif "Top" in text:
         cat = "gainers" if "Gainers" in text else "losers"
         send_market_data(message, cat)
-    
     elif re.fullmatch(r'[A-Za-z0-9.=]{1,10}', text):
         res = get_ticker_info(text)
         if res: bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
