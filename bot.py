@@ -44,7 +44,7 @@ DIGEST_TICKERS = {
 # --- ФУНКЦИИ ДАННЫХ ---
 
 def get_daily_digest():
-    """Сводка по рынкам с защитой от пустых данных"""
+    """Сводка по рынкам с макроэкономикой на русском (NY Time)"""
     try:
         lines = [f"📅 <b>Обзор рынка на {datetime.now().strftime('%d.%m.%Y')}</b>\n"]
         lines.append("📊 <b>Фьючерсы и Индексы:</b>")
@@ -71,9 +71,12 @@ def get_daily_digest():
             except Exception:
                 continue
         
-        lines.append("\n🗓 <b>Экономический календарь:</b>")
-        lines.append("• <b>Ставка ФРС:</b> Следующее решение 29.04.2026.")
-        lines.append("• <b>Безработица:</b> Jobless Claims — каждый четверг в 15:30 МСК.")
+        lines.append("\n🗓 <b>Ключевые события (New York Time):</b>")
+        # Данные актуализированы на весну 2026 года
+        lines.append("• <b>Решение по ставке ФРС:</b> 29 апреля, 14:00 ET")
+        lines.append("• <b>Инфляция (CPI):</b> 15 апреля, 08:30 ET")
+        lines.append("• <b>Занятость (NFP):</b> 3 апреля, 08:30 ET")
+        lines.append("• <b>Уровень безработицы:</b> 3 апреля, 08:30 ET")
         
         lines.append("\n🗞 <b>Главные новости:</b>")
         try:
@@ -145,7 +148,7 @@ def get_market_data(category):
 
 def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    # Сводка и Поиск сверху в один ряд (будут крупными)
+    # Сводка и Поиск сверху в один ряд
     markup.row("📰 Обзор на сегодня", "🔍 Поиск по тикеру")
     # Остальные кнопки ниже
     markup.row("🚀 Top Gainers", "📉 Top Losers")
@@ -154,7 +157,7 @@ def get_main_menu():
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v5.0</b>\n\nВыберите раздел в меню:", 
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v5.1</b>\n\nВыберите раздел в меню:", 
                      parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
@@ -183,13 +186,11 @@ def handle_menu(message):
         bot.send_message(message.chat.id, response, parse_mode="HTML", disable_web_page_preview=True)
     
     else:
-        # Если пришел текст, который не в меню — пробуем искать как тикер
         process_ticker_step(message)
 
 def process_ticker_step(message):
     ticker = message.text.upper().strip()
-    # Проверка, чтобы не искать текст кнопок как тикеры
-    if "ОБЗОР" in ticker or "ПОИСК" in ticker or "TOP" in ticker or "WEEK" in ticker:
+    if any(cmd in ticker for cmd in ["ОБЗОР", "ПОИСК", "TOP", "WEEK"]):
         return
 
     status_msg = bot.send_message(message.chat.id, f"🔍 <i>Ищу {ticker}...</i>", parse_mode="HTML")
