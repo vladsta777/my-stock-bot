@@ -8,6 +8,7 @@ from threading import Thread
 from waitress import serve
 import logging
 import time
+from datetime import datetime
 
 # 1. Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +19,6 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    # Render увидит этот ответ и поймет, что сервис активен
     return "Market Bot is Active and Healthy", 200
 
 def run_flask():
@@ -30,7 +30,55 @@ def run_flask():
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
+# --- СПИСКИ ДЛЯ ОБЗОРА ---
+DIGEST_TICKERS = {
+    "Crude Oil": "CL=F",
+    "Natural Gas": "NG=F",
+    "Gold": "GC=F",
+    "Dow Jones": "YM=F",
+    "S&P 500": "ES=F",
+    "Nasdaq 100": "NQ=F",
+    "Russell 2000": "RTY=F"
+}
+
 # --- ФУНКЦИИ ДАННЫХ ---
+
+def get_daily_digest():
+    """Сборка ежедневной сводки по рынкам"""
+    try:
+        lines = [f"📅 <b>Обзор рынка на {datetime.now().strftime('%d.%m.%Y')}</b>\n"]
+        lines.append("📊 <b>Фьючерсы и Индексы:</b>")
+        
+        for name, ticker in DIGEST_TICKERS.items():
+            t = yf.Ticker(ticker)
+            # Пытаемся получить данные за сегодня
+            hist = t.history(period="2d")
+            if not hist.empty:
+                price = hist['Close'].iloc[-1]
+                prev_price = hist['Close'].iloc[-2]
+                change = ((price - prev_price) / prev_price) * 100
+                emoji = "🟢" if change >= 0 else "🔴"
+                
+                link = f"https://finance.yahoo.com/quote/{ticker}"
+                lines.append(f"{emoji} <a href='{link}'>{name:12}</a>: <b>{price:.2f}</b> (<code>{change:+.2f}%</code>)")
+        
+        lines.append("\n🗓 <b>Экономический календарь:</b>")
+        lines.append("• <b>Ставка ФРС:</b> Следующее решение 29 апреля 2026 г.")
+        lines.append("• <b>Безработица:</b> Данные Jobless Claims — каждый четверг в 15:30 МСК.")
+        
+        lines.append("\n🗞 <b>Главные новости (Digest):</b>")
+        # Парсим новости через тикер S&P 500 (SPY)
+        spy = yf.Ticker("SPY")
+        news = spy.news[:3]
+        for n in news:
+            title = n.get('title')
+            url = n.get('link')
+            lines.append(f"🔹 <a href='{url}'>{title[:75]}...</a>")
+            
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Ошибка дайджеста: {e}")
+        return "❌ <i>Не удалось собрать сводку данных.</i>"
 
 def get_ticker_info(ticker_symbol):
     try:
@@ -104,12 +152,13 @@ def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("🚀 Top Gainers", "📉 Top Losers")
     markup.row("📈 52 Week Gainers", "🧊 52 Week Losers")
+    markup.row("📰 Обзор на сегодня")
     markup.row("🔍 Поиск по тикеру")
     return markup
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v4.7</b>\n\nБот работает 24/7. Выберите категорию или введите тикер:", 
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v4.8</b>\n\nВыберите категорию, получите сводку дня или введите тикер:", 
                      parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
@@ -121,7 +170,13 @@ def handle_menu(message):
         "🧊 52 Week Losers": "low"
     }
     
-    if message.text == "🔍 Поиск по тикеру":
+    if message.text == "📰 Обзор на сегодня":
+        status_msg = bot.send_message(message.chat.id, "⌛ <i>Формирую сводку рынка...</i>", parse_mode="HTML")
+        response = get_daily_digest()
+        bot.delete_message(message.chat.id, status_msg.message_id)
+        bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
+    
+    elif message.text == "🔍 Поиск по тикеру":
         msg = bot.send_message(message.chat.id, "✍️ <b>Введите тикер акции (напр. AAPL, NVDA, TSLA):</b>", parse_mode="HTML")
         bot.register_next_step_handler(msg, process_ticker_step)
     
@@ -136,7 +191,7 @@ def handle_menu(message):
 
 def process_ticker_step(message):
     ticker = message.text.upper().strip()
-    menu_cmds = ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 52 WEEK LOSERS", "🔍 ПОИСК ПО ТИКЕРУ"]
+    menu_cmds = ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 52 WEEK LOSERS", "🔍 ПОИСК ПО ТИКЕРУ", "📰 ОБЗОР НА СЕГОДНЯ"]
     if ticker in menu_cmds:
         handle_menu(message)
         return
@@ -154,27 +209,22 @@ def process_ticker_step(message):
 # --- ЗАПУСК ---
 
 if __name__ == "__main__":
-    # Запуск Flask в фоне
     Thread(target=run_flask, daemon=True).start()
     
-    logger.info(">>> Очистка сессий Telegram...")
     try:
         bot.remove_webhook(drop_pending_updates=True)
     except:
         bot.remove_webhook()
     
     time.sleep(2)
-    logger.info(">>> Бот запущен в режиме 24/7!")
+    logger.info(">>> Бот запущен!")
     
-    # Бесконечный цикл с продвинутым поллингом
     while True:
         try:
-            # infinity_polling сам обрабатывает ошибки сети и таймауты
             bot.infinity_polling(timeout=20, long_polling_timeout=20)
         except Exception as e:
             if "Conflict" in str(e):
-                logger.warning("⚠️ Конфликт процессов. Ожидание завершения старой копии...")
                 time.sleep(20)
             else:
-                logger.error(f"Критическая ошибка: {e}")
+                logger.error(f"Ошибка Polling: {e}")
                 time.sleep(5)
