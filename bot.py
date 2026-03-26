@@ -63,9 +63,13 @@ def get_ticker_info(ticker_symbol):
         info = stock.info
         if not info or 'currentPrice' not in info: return None
 
+        # Расчет изменения за день (%)
+        day_change = info.get('regularMarketChangePercent', 0)
+        change_emoji = "🟢" if day_change >= 0 else "🔴"
+
         # Расчет ATR (упрощенно за 14 дней)
         hist = stock.history(period="20d")
-        atr = (hist['High'] - hist['Low']).mean() if len(hist) > 0 else 0
+        atr = (hist['High'] - hist['Low']).tail(14).mean() if len(hist) > 0 else 0
 
         # Данные по Earnings
         calendar = stock.calendar
@@ -73,13 +77,12 @@ def get_ticker_info(ticker_symbol):
         if calendar and 'Earnings Date' in calendar:
             next_report = calendar['Earnings Date'][0].strftime('%d.%m')
         
-        # Последний отчет (условно берем из истории или info)
         last_eps = info.get('trailingEps', 'N/A')
 
         text = (
             f"🔍 <b>{info.get('longName', ticker_symbol)} ({ticker_symbol})</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 Price: <b>{info.get('currentPrice')} {info.get('currency', 'USD')}</b>\n"
+            f"💰 Price: <b>{info.get('currentPrice')} {info.get('currency', 'USD')}</b> | {change_emoji} <b>{day_change:+.2f}%</b>\n"
             f"📊 Volume: <b>{info.get('volume', 0):,}</b>\n"
             f"📈 Avg Vol: <b>{info.get('averageVolume', 0):,}</b>\n"
             f"🎈 Float: <b>{info.get('floatShares', 0)/1e6:.2f}M</b>\n"
@@ -139,7 +142,6 @@ def handle_all_messages(message):
         cat = "gainers" if "Gainers" in text else "losers"
         bot.send_message(message.chat.id, get_market_data(cat), parse_mode="HTML", disable_web_page_preview=True)
     
-    # Логика: если сообщение похоже на тикер (1-5 букв), обрабатываем сразу
     elif re.fullmatch(r'[A-Za-z]{1,5}', text):
         res = get_ticker_info(text)
         if res: bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
