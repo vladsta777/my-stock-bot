@@ -31,9 +31,9 @@ def run_flask():
     logger.info(f"Запуск Flask-сервера на порту {port}...")
     serve(app, host='0.0.0.0', port=port, threads=4)
 
-# --- ИНИЦИАЛИЗАЦИЯ СЕССИИ ДЛЯ ОБХОДА БЛОКИРОВОК ---
-session = requests.Session()
-session.headers.update({
+# Сессия для внешних запросов (Новости, Pandas)
+request_session = requests.Session()
+request_session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
 })
@@ -70,7 +70,7 @@ def get_daily_digest():
         lines.append("📊 <b>Фьючерсы и Индексы:</b>")
         for name, ticker in DIGEST_TICKERS.items():
             try:
-                t = yf.Ticker(ticker, session=session)
+                t = yf.Ticker(ticker)
                 hist = t.history(period="2d")
                 if not hist.empty:
                     price = hist['Close'].iloc[-1]
@@ -93,30 +93,32 @@ def get_ticker_info(ticker_symbol):
     try:
         ticker_symbol = ticker_symbol.upper().strip()
         logger.info(f"Запрос данных по тикеру: {ticker_symbol}")
-        stock = yf.Ticker(ticker_symbol, session=session)
         
-        # Попытка получить info. Если Rate Limited, пробуем fast_info
+        # БЕЗ ПЕРЕДАЧИ СЕССИИ (yfinance сам создаст curl_cffi если нужно)
+        stock = yf.Ticker(ticker_symbol)
+        
+        # Попытка получить info. 
         try:
             info = stock.info
-        except:
+        except Exception as e:
+            logger.warning(f"Ошибка метода .info для {ticker_symbol}: {e}")
             info = None
 
-        # Запасной вариант, если info заблокирован
+        # Запасной вариант через fast_info, если обычный info упал
         if not info or not (info.get('currentPrice') or info.get('regularMarketPrice')):
-            logger.warning(f"Yahoo ограничил доступ к .info для {ticker_symbol}. Использую fast_info.")
+            logger.info(f"Использую fast_info для {ticker_symbol}")
             fast = stock.fast_info
-            price = fast.get('last_price')
-            if not price: return None
-            
-            # Собираем минимальный набор данных из быстрого доступа
-            info = {
-                'currentPrice': price,
-                'currency': fast.get('currency', 'USD'),
-                'longName': ticker_symbol,
-                'regularMarketChangePercent': fast.get('day_change_percent', 0),
-                'volume': fast.get('last_volume', 0),
-                'marketCap': fast.get('market_cap', 0)
-            }
+            if 'last_price' in fast:
+                info = {
+                    'currentPrice': fast['last_price'],
+                    'currency': fast.get('currency', 'USD'),
+                    'longName': ticker_symbol,
+                    'regularMarketChangePercent': fast.get('day_change_percent', 0),
+                    'volume': fast.get('last_volume', 0),
+                    'marketCap': fast.get('market_cap', 0)
+                }
+            else:
+                return None
 
         day_change = info.get('regularMarketChangePercent', 0) or 0
         change_emoji = "🟢" if day_change >= 0 else "🔴"
@@ -142,11 +144,11 @@ def get_ticker_info(ticker_symbol):
             prev_actual = info.get('trailingEps', "N/A")
             prev_actual_str = f"{prev_actual:.2f}" if isinstance(prev_actual, (int, float)) else "N/A"
 
-        # News MarketWatch
+        # News MarketWatch (используем нашу ручную сессию)
         news_lines = ["🗞 <b>MarketWatch News:</b>"]
         try:
             mw_url = f"https://www.marketwatch.com/investing/stock/{ticker_symbol}"
-            resp = requests.get(mw_url, headers=session.headers, timeout=5)
+            resp = request_session.get(mw_url, timeout=5)
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, 'html.parser')
                 headlines = soup.find_all('h3', class_='article__headline', limit=3)
@@ -190,7 +192,7 @@ def send_market_data(message, category):
     try:
         logger.info(f"Запрос категории: {category}")
         url = f"https://finance.yahoo.com/markets/stocks/{category}/"
-        dfs = pd.read_html(url, storage_options={'User-Agent': session.headers['User-Agent']})
+        dfs = pd.read_html(url, storage_options={'User-Agent': request_session.headers['User-Agent']})
         df = dfs[0].head(10)
         
         is_gainers = category == "gainers"
@@ -240,33 +242,26 @@ def send_welcome(message):
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
     text = message.text
-    user_id = message.from_user.id
-    logger.info(f"Сообщение от {user_id}: {text}")
-
-    try:
-        if text == "📰 Обзор на сегодня":
-            wait_msg = bot.send_message(message.chat.id, "⏳ <b>Формирую сводку...</b>", parse_mode="HTML")
-            res = get_daily_digest()
-            bot.delete_message(message.chat.id, wait_msg.message_id)
-            bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
-        elif text == "🔍 Поиск по тикеру":
-            bot.send_message(message.chat.id, "✍️ Введите тикер (например, AAPL):")
-        elif "Top" in text:
-            send_market_data(message, "gainers" if "Gainers" in text else "losers")
-        elif re.fullmatch(r'[A-Za-z0-9.=]{1,10}', text):
-            wait_msg = bot.send_message(message.chat.id, f"⏳ <b>Ищу {text.upper()}...</b>", parse_mode="HTML")
-            res = get_ticker_info(text)
-            bot.delete_message(message.chat.id, wait_msg.message_id)
-            if res: bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
-            else: bot.send_message(message.chat.id, "❌ Тикер не найден.")
-    except Exception as e:
-        logger.error(f"Ошибка в обработчике сообщений: {e}")
+    if text == "📰 Обзор на сегодня":
+        wait_msg = bot.send_message(message.chat.id, "⏳ <b>Формирую сводку...</b>", parse_mode="HTML")
+        res = get_daily_digest()
+        bot.delete_message(message.chat.id, wait_msg.message_id)
+        bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
+    elif text == "🔍 Поиск по тикеру":
+        bot.send_message(message.chat.id, "✍️ Введите тикер (например, AAPL):")
+    elif "Top" in text:
+        send_market_data(message, "gainers" if "Gainers" in text else "losers")
+    elif re.fullmatch(r'[A-Za-z0-9.=]{1,10}', text):
+        wait_msg = bot.send_message(message.chat.id, f"⏳ <b>Ищу {text.upper()}...</b>", parse_mode="HTML")
+        res = get_ticker_info(text)
+        bot.delete_message(message.chat.id, wait_msg.message_id)
+        if res: bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
+        else: bot.send_message(message.chat.id, "❌ Тикер не найден.")
 
 # --- УСТОЙЧИВЫЙ ЗАПУСК ---
 
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
-    
     while True:
         try:
             logger.info("Бот запускает polling...")
