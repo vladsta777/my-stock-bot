@@ -27,7 +27,7 @@ def run_flask():
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
-# --- ФУНКЦИИ ДАННЫХ ---
+# --- ФУНКЦИИ ПОЛУЧЕНИЯ ДАННЫХ ---
 
 def get_ticker_info(ticker_symbol):
     """Поиск данных по конкретному тикеру через yfinance"""
@@ -36,6 +36,7 @@ def get_ticker_info(ticker_symbol):
         stock = yf.Ticker(ticker_symbol)
         info = stock.info
         
+        # Проверка наличия данных
         if not info or ('regularMarketPrice' not in info and 'currentPrice' not in info):
             return None
             
@@ -64,7 +65,7 @@ def get_ticker_info(ticker_symbol):
         return None
 
 def get_market_data(category):
-    """Парсинг таблиц лидеров с Yahoo Finance"""
+    """Парсинг списков лидеров с Yahoo Finance"""
     try:
         urls = {
             "gainers": "https://finance.yahoo.com/markets/stocks/gainers/",
@@ -97,7 +98,7 @@ def get_market_data(category):
         logger.error(f"Ошибка парсинга {category}: {e}")
         return "❌ <i>Данные временно недоступны.</i>"
 
-# --- ЛОГИКА МЕНЮ ---
+# --- ЛОГИКА ИНТЕРФЕЙСА ---
 
 def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -108,7 +109,7 @@ def get_main_menu():
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v4.2</b>\n\nВыберите категорию или используйте поиск:", 
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v4.5</b>\n\nИспользуйте меню для анализа рынка США или выполните поиск по тикеру:", 
                      parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
@@ -121,7 +122,8 @@ def handle_menu(message):
     }
     
     if message.text == "🔍 Поиск по тикеру":
-        msg = bot.send_message(message.chat.id, "✍️ <b>Введите тикер акции (напр. AAPL, NVDA, TSLA):</b>", parse_mode="HTML")
+        msg = bot.send_message(message.chat.id, "✍️ <b>Введите тикер (напр. AAPL, NVDA или TSLA):</b>", parse_mode="HTML")
+        # Регистрируем следующий шаг: ждем ввода тикера
         bot.register_next_step_handler(msg, process_ticker_step)
     
     elif message.text in mapping:
@@ -131,49 +133,11 @@ def handle_menu(message):
         bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
     
     else:
-        bot.send_message(message.chat.id, "🔄 Используйте кнопки меню:", reply_markup=get_main_menu())
+        bot.send_message(message.chat.id, "🔄 Пожалуйста, используйте кнопки меню:", reply_markup=get_main_menu())
 
 def process_ticker_step(message):
-    """Шаг получения текста тикера от пользователя"""
+    """Обработка текста после нажатия кнопки Поиск"""
     ticker = message.text.upper().strip()
     
-    # Если юзер вместо тикера нажал другую кнопку меню
-    if ticker in ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 52 WEEK LOSERS", "🔍 ПОИСК ПО ТИКЕРУ"]:
-        handle_menu(message)
-        return
-
-    status_msg = bot.send_message(message.chat.id, f"🔍 <i>Анализируем {ticker}...</i>", parse_mode="HTML")
-    response = get_ticker_info(ticker)
-    bot.delete_message(message.chat.id, status_msg.message_id)
-    
-    if response:
-        bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
-    else:
-        bot.send_message(message.chat.id, f"❌ Тикер <b>{ticker}</b> не найден. Проверьте правильность написания.", 
-                         parse_mode="HTML", reply_markup=get_main_menu())
-
-# --- ЗАПУСК ---
-
-if __name__ == "__main__":
-    Thread(target=run_flask, daemon=True).start()
-    
-    logger.info(">>> Очистка сессий Telegram...")
-    try:
-        bot.remove_webhook(drop_pending_updates=True)
-    except:
-        bot.remove_webhook()
-        bot.get_updates(offset=-1)
-    
-    time.sleep(3)
-    logger.info(">>> Бот запущен!")
-    
-    while True:
-        try:
-            bot.polling(none_stop=True, interval=1, timeout=60)
-        except Exception as e:
-            if "Conflict" in str(e):
-                logger.warning("⚠️ Конфликт 409. Ожидание 20 сек...")
-                time.sleep(20)
-            else:
-                logger.error(f"Ошибка Polling: {e}")
-                time.sleep(5)
+    # Если пользователь передумал и нажал кнопку меню вместо ввода тикера
+    menu_commands = ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 5
