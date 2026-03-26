@@ -88,6 +88,23 @@ def get_ticker_info(ticker_symbol):
             prev_actual = info.get('trailingEps', "N/A")
             prev_actual_str = f"{prev_actual:.2f}" if isinstance(prev_actual, (int, float)) else "N/A"
 
+        # --- ЛОГИКА НОВОСТЕЙ С ВРЕМЕНЕМ ---
+        last_news_text = "🗞 <i>Новостей не найдено</i>"
+        try:
+            news = stock.news
+            if news:
+                latest = news[0]
+                title = latest.get('title')
+                link = latest.get('link')
+                pub_time_unix = latest.get('providerPublishTime')
+                if pub_time_unix:
+                    # Конвертируем время публикации
+                    pub_time = datetime.fromtimestamp(pub_time_unix).strftime('%d.%m %H:%M')
+                    last_news_text = f"🗞 <b>Новость ({pub_time}):</b>\n<a href='{link}'>{title}</a>"
+                else:
+                    last_news_text = f"🗞 <b>Последняя новость:</b>\n<a href='{link}'>{title}</a>"
+        except: pass
+
         text = (
             f"🔍 <b>{info.get('longName', ticker_symbol)} ({ticker_symbol})</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -100,6 +117,8 @@ def get_ticker_info(ticker_symbol):
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📅 <b>EARNINGS:</b>\n"
             f"• Ожидаем: <b>{next_report}</b> | Прогноз: <b>{forecast_str}</b> (Прошлый факт: <b>{prev_actual_str}</b>)\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{last_news_text}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🔗 <a href='https://finance.yahoo.com/quote/{ticker_symbol}'>Open in Yahoo</a>"
         )
@@ -123,7 +142,6 @@ def send_market_data(message, category):
         for _, row in df.iterrows():
             sym = row['Symbol']
             chg = row.get('% Change', row.get('Change', '0%'))
-            # Текст кнопки: Тикер + Изменение, Callback: сам тикер
             btn = types.InlineKeyboardButton(f"{sym} ({chg})", callback_data=f"t_info_{sym}")
             buttons.append(btn)
         
@@ -152,7 +170,7 @@ def handle_ticker_callback(call):
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v9.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v11.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
