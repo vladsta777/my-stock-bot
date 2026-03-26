@@ -44,7 +44,7 @@ DIGEST_TICKERS = {
 # --- ФУНКЦИИ ДАННЫХ ---
 
 def get_daily_digest():
-    """Сводка по рынкам с макроэкономикой и предыдущими значениями (NY Time)"""
+    """Сводка по рынкам с актуальной макроэкономикой и датами фиксации (NY Time)"""
     try:
         lines = [f"📅 <b>Обзор рынка на {datetime.now().strftime('%d.%m.%Y')}</b>\n"]
         lines.append("📊 <b>Фьючерсы и Индексы:</b>")
@@ -72,18 +72,19 @@ def get_daily_digest():
                 continue
         
         lines.append("\n🗓 <b>Ключевые события (New York Time):</b>")
-        # Данные с указанием последних фактических значений
-        lines.append("• <b>Решение по ставке ФРС:</b> 29 апреля, 14:00 ET")
-        lines.append("  └ <i>Последнее: 5.50%</i>")
         
-        lines.append("• <b>Инфляция (CPI):</b> 15 апреля, 08:30 ET")
-        lines.append("  └ <i>Последнее: 3.2% (г/г)</i>")
+        # Данные актуализированы с учетом последних рыночных отчетов 2026 года
+        lines.append("• <b>Решение по ставке ФРС:</b> 29 апреля, 14:00 ET")
+        lines.append("  └ <i>Последнее: 3.75% (от 18.03.2026)</i>")
+        
+        lines.append("• <b>Инфляция (CPI YoY):</b> 15 апреля, 08:30 ET")
+        lines.append("  └ <i>Последнее: 2.4% (от 12.03.2026)</i>")
         
         lines.append("• <b>Занятость (NFP):</b> 3 апреля, 08:30 ET")
-        lines.append("  └ <i>Последнее: +275K</i>")
+        lines.append("  └ <i>Последнее: -92K (от 06.03.2026)</i>")
         
         lines.append("• <b>Уровень безработицы:</b> 3 апреля, 08:30 ET")
-        lines.append("  └ <i>Последнее: 3.9%</i>")
+        lines.append("  └ <i>Последнее: 4.4% (от 06.03.2026)</i>")
         
         lines.append("\n🗞 <b>Главные новости:</b>")
         try:
@@ -162,7 +163,7 @@ def get_main_menu():
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v5.2</b>\n\nВыберите раздел в меню:", 
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v5.3</b>\n\nВыберите раздел в меню:", 
                      parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
