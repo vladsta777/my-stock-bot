@@ -44,41 +44,50 @@ DIGEST_TICKERS = {
 # --- ФУНКЦИИ ДАННЫХ ---
 
 def get_daily_digest():
-    """Сборка ежедневной сводки по рынкам"""
+    """Сводка по рынкам с защитой от пустых данных"""
     try:
         lines = [f"📅 <b>Обзор рынка на {datetime.now().strftime('%d.%m.%Y')}</b>\n"]
         lines.append("📊 <b>Фьючерсы и Индексы:</b>")
         
         for name, ticker in DIGEST_TICKERS.items():
-            t = yf.Ticker(ticker)
-            # Пытаемся получить данные за сегодня
-            hist = t.history(period="2d")
-            if not hist.empty:
-                price = hist['Close'].iloc[-1]
-                prev_price = hist['Close'].iloc[-2]
-                change = ((price - prev_price) / prev_price) * 100
-                emoji = "🟢" if change >= 0 else "🔴"
+            try:
+                t = yf.Ticker(ticker)
+                hist = t.history(period="5d")
+                
+                if not hist.empty and len(hist) >= 2:
+                    price = hist['Close'].iloc[-1]
+                    prev_price = hist['Close'].iloc[-2]
+                    change = ((price - prev_price) / prev_price) * 100
+                    emoji = "🟢" if change >= 0 else "🔴"
+                    change_str = f"<code>{change:+.2f}%</code>"
+                else:
+                    price = t.info.get('regularMarketPrice') or t.info.get('currentPrice', 'N/A')
+                    emoji = "⚪️"
+                    change_str = "<code>нет данных</code>"
                 
                 link = f"https://finance.yahoo.com/quote/{ticker}"
-                lines.append(f"{emoji} <a href='{link}'>{name:12}</a>: <b>{price:.2f}</b> (<code>{change:+.2f}%</code>)")
+                p_val = f"{price:.2f}" if isinstance(price, (int, float)) else price
+                lines.append(f"{emoji} <a href='{link}'>{name:12}</a>: <b>{p_val}</b> ({change_str})")
+            except Exception:
+                continue
         
         lines.append("\n🗓 <b>Экономический календарь:</b>")
-        lines.append("• <b>Ставка ФРС:</b> Следующее решение 29 апреля 2026 г.")
-        lines.append("• <b>Безработица:</b> Данные Jobless Claims — каждый четверг в 15:30 МСК.")
+        lines.append("• <b>Ставка ФРС:</b> Следующее решение 29.04.2026.")
+        lines.append("• <b>Безработица:</b> Jobless Claims — каждый четверг в 15:30 МСК.")
         
-        lines.append("\n🗞 <b>Главные новости (Digest):</b>")
-        # Парсим новости через тикер S&P 500 (SPY)
-        spy = yf.Ticker("SPY")
-        news = spy.news[:3]
-        for n in news:
-            title = n.get('title')
-            url = n.get('link')
-            lines.append(f"🔹 <a href='{url}'>{title[:75]}...</a>")
+        lines.append("\n🗞 <b>Главные новости:</b>")
+        try:
+            spy = yf.Ticker("SPY")
+            news = spy.news[:3]
+            for n in news:
+                lines.append(f"🔹 <a href='{n.get('link')}'>{n.get('title')[:75]}...</a>")
+        except:
+            lines.append("<i>Новости временно недоступны</i>")
             
         return "\n".join(lines)
     except Exception as e:
         logger.error(f"Ошибка дайджеста: {e}")
-        return "❌ <i>Не удалось собрать сводку данных.</i>"
+        return "❌ <i>Не удалось собрать сводку. Попробуйте еще раз.</i>"
 
 def get_ticker_info(ticker_symbol):
     try:
@@ -93,8 +102,6 @@ def get_ticker_info(ticker_symbol):
         currency = info.get('currency', 'USD')
         change = info.get('regularMarketChangePercent', 0)
         name = info.get('longName', ticker_symbol)
-        sector = info.get('sector', 'N/A')
-        industry = info.get('industry', 'N/A')
         
         emoji = "🟢" if (change and change >= 0) else "🔴"
         
@@ -102,15 +109,12 @@ def get_ticker_info(ticker_symbol):
             f"🔍 <b>{name} ({ticker_symbol})</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 Price: <b>{price} {currency}</b>\n"
-            f"{emoji} Day Change: <code>{change:.2f}%</code>\n\n"
-            f"🏢 Sector: <i>{sector}</i>\n"
-            f"🛠 Industry: <i>{industry}</i>\n"
+            f"{emoji} Day Change: <code>{change:.2f}%</code>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🔗 <a href='https://finance.yahoo.com/quote/{ticker_symbol}'>View on Yahoo Finance</a>"
         )
         return text
-    except Exception as e:
-        logger.error(f"Ошибка yfinance для {ticker_symbol}: {e}")
+    except Exception:
         return None
 
 def get_market_data(category):
@@ -121,44 +125,36 @@ def get_market_data(category):
             "high": "https://finance.yahoo.com/markets/stocks/52-week-gainers/",
             "low": "https://finance.yahoo.com/markets/stocks/52-week-losers/"
         }
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-        
+        headers = {"User-Agent": "Mozilla/5.0"}
         dfs = pd.read_html(urls[category], storage_options=headers)
-        if not dfs: return "❌ Таблицы не найдены."
-        
         df = dfs[0].head(10)
         lines = []
         for _, row in df.iterrows():
             ticker = str(row['Symbol'])
             price = row['Price']
-            change = row.get('52 Week % Change', row.get('% Change', row.get('Change', 'N/A')))
+            change = row.get('% Change', row.get('Change', 'N/A'))
             emoji = "🟢" if category in ["gainers", "high"] else "🔴"
             lines.append(f"{emoji} <a href='https://finance.yahoo.com/quote/{ticker}'>{ticker:5}</a> | <b>${price}</b> (<code>{change}</code>)")
 
-        titles = {
-            "gainers": "🚀 <b>Top 10 Gainers (Daily)</b>",
-            "losers": "📉 <b>Top 10 Losers (Daily)</b>",
-            "high": "📈 <b>52 Week Gainers</b>",
-            "low": "🧊 <b>52 Week Losers</b>"
-        }
+        titles = {"gainers": "🚀 <b>Top 10 Gainers</b>", "losers": "📉 <b>Top 10 Losers</b>", "high": "📈 <b>52W High</b>", "low": "🧊 <b>52W Low</b>"}
         return f"{titles[category]}\n\n" + "\n".join(lines)
-    except Exception as e:
-        logger.error(f"Ошибка парсинга {category}: {e}")
+    except Exception:
         return "❌ <i>Данные временно недоступны.</i>"
 
 # --- ЛОГИКА ИНТЕРФЕЙСА ---
 
 def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    # Сводка и Поиск сверху в один ряд (будут крупными)
+    markup.row("📰 Обзор на сегодня", "🔍 Поиск по тикеру")
+    # Остальные кнопки ниже
     markup.row("🚀 Top Gainers", "📉 Top Losers")
     markup.row("📈 52 Week Gainers", "🧊 52 Week Losers")
-    markup.row("📰 Обзор на сегодня")
-    markup.row("🔍 Поиск по тикеру")
     return markup
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v4.8</b>\n\nВыберите категорию, получите сводку дня или введите тикер:", 
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v5.0</b>\n\nВыберите раздел в меню:", 
                      parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
@@ -171,60 +167,48 @@ def handle_menu(message):
     }
     
     if message.text == "📰 Обзор на сегодня":
-        status_msg = bot.send_message(message.chat.id, "⌛ <i>Формирую сводку рынка...</i>", parse_mode="HTML")
+        status_msg = bot.send_message(message.chat.id, "⌛ <i>Загрузка сводки...</i>", parse_mode="HTML")
         response = get_daily_digest()
         bot.delete_message(message.chat.id, status_msg.message_id)
-        bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
+        bot.send_message(message.chat.id, response, parse_mode="HTML", disable_web_page_preview=True)
     
     elif message.text == "🔍 Поиск по тикеру":
-        msg = bot.send_message(message.chat.id, "✍️ <b>Введите тикер акции (напр. AAPL, NVDA, TSLA):</b>", parse_mode="HTML")
+        msg = bot.send_message(message.chat.id, "✍️ <b>Введите тикер (напр. AAPL):</b>", parse_mode="HTML")
         bot.register_next_step_handler(msg, process_ticker_step)
     
     elif message.text in mapping:
-        status_msg = bot.send_message(message.chat.id, "⌛ <i>Загрузка данных...</i>", parse_mode="HTML")
+        status_msg = bot.send_message(message.chat.id, "⌛ <i>Получаю данные...</i>", parse_mode="HTML")
         response = get_market_data(mapping[message.text])
         bot.delete_message(message.chat.id, status_msg.message_id)
-        bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
+        bot.send_message(message.chat.id, response, parse_mode="HTML", disable_web_page_preview=True)
     
     else:
-        bot.send_message(message.chat.id, "🔄 Используйте кнопки меню:", reply_markup=get_main_menu())
+        # Если пришел текст, который не в меню — пробуем искать как тикер
+        process_ticker_step(message)
 
 def process_ticker_step(message):
     ticker = message.text.upper().strip()
-    menu_cmds = ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 52 WEEK LOSERS", "🔍 ПОИСК ПО ТИКЕРУ", "📰 ОБЗОР НА СЕГОДНЯ"]
-    if ticker in menu_cmds:
-        handle_menu(message)
+    # Проверка, чтобы не искать текст кнопок как тикеры
+    if "ОБЗОР" in ticker or "ПОИСК" in ticker or "TOP" in ticker or "WEEK" in ticker:
         return
 
-    status_msg = bot.send_message(message.chat.id, f"🔍 <i>Анализируем {ticker}...</i>", parse_mode="HTML")
+    status_msg = bot.send_message(message.chat.id, f"🔍 <i>Ищу {ticker}...</i>", parse_mode="HTML")
     response = get_ticker_info(ticker)
     bot.delete_message(message.chat.id, status_msg.message_id)
     
     if response:
-        bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
+        bot.send_message(message.chat.id, response, parse_mode="HTML", disable_web_page_preview=True)
     else:
-        bot.send_message(message.chat.id, f"❌ Тикер <b>{ticker}</b> не найден.", 
-                         parse_mode="HTML", reply_markup=get_main_menu())
+        bot.send_message(message.chat.id, f"❌ Тикер <b>{ticker}</b> не найден.", parse_mode="HTML")
 
 # --- ЗАПУСК ---
 
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
-    
     try:
         bot.remove_webhook(drop_pending_updates=True)
     except:
-        bot.remove_webhook()
+        pass
     
-    time.sleep(2)
     logger.info(">>> Бот запущен!")
-    
-    while True:
-        try:
-            bot.infinity_polling(timeout=20, long_polling_timeout=20)
-        except Exception as e:
-            if "Conflict" in str(e):
-                time.sleep(20)
-            else:
-                logger.error(f"Ошибка Polling: {e}")
-                time.sleep(5)
+    bot.infinity_polling(timeout=20, long_polling_timeout=20)
