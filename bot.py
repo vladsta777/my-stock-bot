@@ -32,11 +32,14 @@ DIGEST_TICKERS = {
     "Dow Jones": "YM=F", "S&P 500": "ES=F", "Nasdaq 100": "NQ=F", "Russell 2000": "RTY=F"
 }
 
-# --- Вспомогательная функция для объема ---
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
 def format_volume(volume):
     """Превращает 301801 в 301K, а 2204000 в 2.2M"""
     try:
-        val = float(str(volume).replace(',', ''))
+        # Убираем лишние символы, если они уже есть в строке
+        val_str = str(volume).replace(',', '').replace('M', '').replace('K', '').replace('$', '')
+        val = float(val_str)
         if val >= 1e6: return f"{val/1e6:.1f}M"
         if val >= 1e3: return f"{int(val/1e3)}K"
         return str(int(val))
@@ -147,20 +150,21 @@ def send_market_data(message, category):
         
         for _, row in df.iterrows():
             sym = str(row['Symbol'])
-            # Очистка цены (убираем прилипшие изменения)
+            # Очистка цены (убираем прилипшие изменения и знаки $)
             price_raw = str(row['Price']).split('+')[0].split('-')[0].replace('$', '').strip()
             
-            # Извлекаем процент из скобок (избавляемся от лишних цифр перед Vol)
-            change_col = str(row.get('Change', '0%'))
-            pct_match = re.search(r'\((.*?)\)', change_col)
-            pct_val = pct_match.group(1) if pct_match else change_col
+            # Извлекаем ПРОЦЕНТЫ (ищем число со знаком % и учитываем знак + / -)
+            # Это решает проблему "лишних цифр" перед Volume
+            change_col = str(row.get('% Change', row.get('Change', '0%')))
+            pct_match = re.search(r'([+-]?\d+\.?\d*%)', change_col)
+            pct_val = pct_match.group(1) if pct_match else "0%"
             
             # Сокращаем объем (301801 -> 301K)
             vol_formatted = format_volume(row.get('Volume', '-'))
             
             emoji = "🟢" if is_gainers else "🔴"
             
-            # Финальная чистая кнопка
+            # Кнопка: Тикер | Цена | Процент (явно со знаком %) | Объем
             btn_text = f"{emoji} {sym:5} | ${price_raw} | {pct_val} | Vol: {vol_formatted}"
             
             btn = types.InlineKeyboardButton(btn_text, callback_data=f"t_info_{sym}")
@@ -190,7 +194,7 @@ def handle_ticker_callback(call):
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v15.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v16.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
