@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 # 2. Мини-сервер для UptimeRobot
 app = Flask('')
 @app.route('/')
-def home(): return "Market Bot is Active", 200
+def home(): 
+    return "Market Bot is Active", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -27,16 +28,15 @@ def run_flask():
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
-# --- ФУНКЦИИ ПОЛУЧЕНИЯ ДАННЫХ ---
+# --- ФУНКЦИИ ДАННЫХ ---
 
 def get_ticker_info(ticker_symbol):
-    """Поиск данных по конкретному тикеру через yfinance"""
+    """Поиск расширенных данных по тикеру через yfinance"""
     try:
         ticker_symbol = ticker_symbol.upper().strip()
         stock = yf.Ticker(ticker_symbol)
         info = stock.info
         
-        # Проверка наличия данных
         if not info or ('regularMarketPrice' not in info and 'currentPrice' not in info):
             return None
             
@@ -65,7 +65,7 @@ def get_ticker_info(ticker_symbol):
         return None
 
 def get_market_data(category):
-    """Парсинг списков лидеров с Yahoo Finance"""
+    """Парсинг таблиц лидеров с Yahoo Finance через pandas"""
     try:
         urls = {
             "gainers": "https://finance.yahoo.com/markets/stocks/gainers/",
@@ -109,7 +109,7 @@ def get_main_menu():
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v4.5</b>\n\nИспользуйте меню для анализа рынка США или выполните поиск по тикеру:", 
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v4.6</b>\n\nВыберите категорию или используйте поиск:", 
                      parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
@@ -122,8 +122,7 @@ def handle_menu(message):
     }
     
     if message.text == "🔍 Поиск по тикеру":
-        msg = bot.send_message(message.chat.id, "✍️ <b>Введите тикер (напр. AAPL, NVDA или TSLA):</b>", parse_mode="HTML")
-        # Регистрируем следующий шаг: ждем ввода тикера
+        msg = bot.send_message(message.chat.id, "✍️ <b>Введите тикер акции (напр. AAPL, NVDA, TSLA):</b>", parse_mode="HTML")
         bot.register_next_step_handler(msg, process_ticker_step)
     
     elif message.text in mapping:
@@ -133,29 +132,29 @@ def handle_menu(message):
         bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
     
     else:
-        bot.send_message(message.chat.id, "🔄 Пожалуйста, используйте кнопки меню:", reply_markup=get_main_menu())
+        bot.send_message(message.chat.id, "🔄 Используйте кнопки меню:", reply_markup=get_main_menu())
 
 def process_ticker_step(message):
-    """Обработка текста после нажатия кнопки Поиск"""
+    """Шаг получения текста тикера от пользователя"""
     ticker = message.text.upper().strip()
     
-    # Если пользователь передумал и нажал кнопку меню вместо ввода тикера
-    menu_commands = ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 52 WEEK LOSERS", "🔍 ПОИСК ПО ТИКЕРУ"]
-    if ticker in menu_commands:
-        handle_menu(message) # Перенаправляем обратно в меню
+    # Проверка: если юзер вместо ввода нажал другую кнопку меню
+    menu_cmds = ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 52 WEEK LOSERS", "🔍 ПОИСК ПО ТИКЕРУ"]
+    if ticker in menu_cmds:
+        handle_menu(message)
         return
 
-    status_msg = bot.send_message(message.chat.id, f"🔍 <i>Анализирую {ticker}...</i>", parse_mode="HTML")
+    status_msg = bot.send_message(message.chat.id, f"🔍 <i>Анализируем {ticker}...</i>", parse_mode="HTML")
     response = get_ticker_info(ticker)
     bot.delete_message(message.chat.id, status_msg.message_id)
     
     if response:
         bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
     else:
-        bot.send_message(message.chat.id, f"❌ Тикер <b>{ticker}</b> не найден. Попробуйте еще раз или выберите категорию:", 
+        bot.send_message(message.chat.id, f"❌ Тикер <b>{ticker}</b> не найден. Попробуйте еще раз:", 
                          parse_mode="HTML", reply_markup=get_main_menu())
 
-# --- ТОЧКА ВХОДА ---
+# --- ЗАПУСК ---
 
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
@@ -168,7 +167,7 @@ if __name__ == "__main__":
         bot.get_updates(offset=-1)
     
     time.sleep(3)
-    logger.info(">>> Бот запущен!")
+    logger.info(">>> Бот в эфире!")
     
     while True:
         try:
