@@ -2,3 +2,6 @@ yfinance
 requests
 pyTelegramBotAPI
 flask
+waitress
+pandas
+lxml
