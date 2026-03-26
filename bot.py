@@ -140,4 +140,43 @@ def process_ticker_step(message):
     ticker = message.text.upper().strip()
     
     # Если пользователь передумал и нажал кнопку меню вместо ввода тикера
-    menu_commands = ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 5
+    menu_commands = ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 52 WEEK LOSERS", "🔍 ПОИСК ПО ТИКЕРУ"]
+    if ticker in menu_commands:
+        handle_menu(message) # Перенаправляем обратно в меню
+        return
+
+    status_msg = bot.send_message(message.chat.id, f"🔍 <i>Анализирую {ticker}...</i>", parse_mode="HTML")
+    response = get_ticker_info(ticker)
+    bot.delete_message(message.chat.id, status_msg.message_id)
+    
+    if response:
+        bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
+    else:
+        bot.send_message(message.chat.id, f"❌ Тикер <b>{ticker}</b> не найден. Попробуйте еще раз или выберите категорию:", 
+                         parse_mode="HTML", reply_markup=get_main_menu())
+
+# --- ТОЧКА ВХОДА ---
+
+if __name__ == "__main__":
+    Thread(target=run_flask, daemon=True).start()
+    
+    logger.info(">>> Очистка сессий Telegram...")
+    try:
+        bot.remove_webhook(drop_pending_updates=True)
+    except:
+        bot.remove_webhook()
+        bot.get_updates(offset=-1)
+    
+    time.sleep(3)
+    logger.info(">>> Бот запущен!")
+    
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=1, timeout=60)
+        except Exception as e:
+            if "Conflict" in str(e):
+                logger.warning("⚠️ Конфликт 409. Ожидание 20 сек...")
+                time.sleep(20)
+            else:
+                logger.error(f"Ошибка Polling: {e}")
+                time.sleep(5)
