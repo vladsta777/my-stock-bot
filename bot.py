@@ -37,7 +37,6 @@ DIGEST_TICKERS = {
 def format_volume(volume):
     """Превращает 301801 в 301K, а 2204000 в 2.2M"""
     try:
-        # Убираем лишние символы, если они уже есть в строке
         val_str = str(volume).replace(',', '').replace('M', '').replace('K', '').replace('$', '')
         val = float(val_str)
         if val >= 1e6: return f"{val/1e6:.1f}M"
@@ -150,22 +149,23 @@ def send_market_data(message, category):
         
         for _, row in df.iterrows():
             sym = str(row['Symbol'])
-            # Очистка цены (убираем прилипшие изменения и знаки $)
+            
+            # Извлекаем чистую цену (до знаков + или -)
             price_raw = str(row['Price']).split('+')[0].split('-')[0].replace('$', '').strip()
             
-            # Извлекаем ПРОЦЕНТЫ (ищем число со знаком % и учитываем знак + / -)
-            # Это решает проблему "лишних цифр" перед Volume
-            change_col = str(row.get('% Change', row.get('Change', '0%')))
-            pct_match = re.search(r'([+-]?\d+\.?\d*%)', change_col)
-            pct_val = pct_match.group(1) if pct_match else "0%"
+            # Собираем формат: +1.29 (+8.19%)
+            change_col = str(row.get('Change', ''))
+            # Ищем подстроку с изменением и процентами в скобках
+            change_match = re.search(r'([+-]\d+\.\d+\s\([+-]?\d+\.?\d*%\))', change_col)
+            change_display = change_match.group(1) if change_match else "0.00 (0%)"
             
-            # Сокращаем объем (301801 -> 301K)
+            # Сокращаем объем (K/M)
             vol_formatted = format_volume(row.get('Volume', '-'))
             
             emoji = "🟢" if is_gainers else "🔴"
             
-            # Кнопка: Тикер | Цена | Процент (явно со знаком %) | Объем
-            btn_text = f"{emoji} {sym:5} | ${price_raw} | {pct_val} | Vol: {vol_formatted}"
+            # Финальная строка кнопки
+            btn_text = f"{emoji} {sym:5} | ${price_raw} {change_display} | Vol: {vol_formatted}"
             
             btn = types.InlineKeyboardButton(btn_text, callback_data=f"t_info_{sym}")
             markup.add(btn)
