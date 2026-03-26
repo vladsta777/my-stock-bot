@@ -3,6 +3,8 @@ from telebot import types
 import pandas as pd
 import yfinance as yf
 import os
+import requests
+from bs4 import BeautifulSoup
 from flask import Flask
 from threading import Thread
 from waitress import serve
@@ -35,17 +37,22 @@ DIGEST_TICKERS = {
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
 def format_volume(volume):
-    """Превращает 2204000 в 2.2M, а 301801 в 301K. Исправлено для очистки всех спецсимволов."""
+    """Исправлено: берет число до и одну цифру после запятой/точки, добавляя M или K."""
     try:
-        # Убираем запятые, пробелы и любые нечисловые символы, кроме точки
-        clean_val = re.sub(r'[^\d.]', '', str(volume))
+        val_str = str(volume).upper()
+        # Если Yahoo уже прислал с буквой, оставляем
+        if 'M' in val_str or 'K' in val_str:
+            return val_str
+            
+        # Очищаем от запятых и прочего
+        clean_val = re.sub(r'[^\d.]', '', val_str)
         if not clean_val: return str(volume)
         
         val = float(clean_val)
         if val >= 1_000_000:
             return f"{val/1_000_000:.1f}M"
         if val >= 1_000:
-            return f"{int(val/1_000)}K"
+            return f"{val/1_000:.1f}K"
         return str(int(val))
     except:
         return str(volume)
@@ -105,16 +112,26 @@ def get_ticker_info(ticker_symbol):
             prev_actual = info.get('trailingEps', "N/A")
             prev_actual_str = f"{prev_actual:.2f}" if isinstance(prev_actual, (int, float)) else "N/A"
 
-        news_lines = ["🗞 <b>Последние новости:</b>"]
+        # --- НОВОСТИ С MARKETWATCH ---
+        news_lines = ["🗞 <b>MarketWatch News:</b>"]
         try:
-            news = stock.news
-            if news and len(news) > 0:
-                for item in news[:3]:
-                    n_title = item.get('title', 'Новость без заголовка')
-                    n_link = item.get('link', '#')
-                    news_lines.append(f"• <a href='{n_link}'>{n_title}</a>")
+            mw_url = f"https://www.marketwatch.com/investing/stock/{ticker_symbol}"
+            mw_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+            resp = requests.get(mw_url, headers=mw_headers, timeout=5)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                headlines = soup.find_all('h3', class_='article__headline', limit=3)
+                if headlines:
+                    for hl in headlines:
+                        title = hl.get_text(strip=True)
+                        link_tag = hl.find('a')
+                        link = link_tag['href'] if link_tag else "#"
+                        if link.startswith('/'): link = "https://www.marketwatch.com" + link
+                        news_lines.append(f"• <a href='{link}'>{title}</a>")
+                else:
+                    news_lines.append("<i>Новостей не найдено</i>")
             else:
-                news_lines.append("<i>Новостей не найдено</i>")
+                news_lines.append("<i>Источник недоступен</i>")
         except:
             news_lines.append("<i>Ошибка загрузки новостей</i>")
         
@@ -152,24 +169,18 @@ def send_market_data(message, category):
         title = f"📊 <b>TOP {cat_label}:</b>\n<i>Нажми для быстрого анализа:</i>"
         
         markup = types.InlineKeyboardMarkup(row_width=1)
-        
         for _, row in df.iterrows():
             sym = str(row['Symbol'])
-            
-            # 1. Извлекаем цену
             price_raw = str(row['Price']).split('+')[0].split('-')[0].replace('$', '').strip()
-            
-            # 2. Ищем изменение во всей строке (защита от сдвига колонок)
             full_row_str = " ".join(map(str, row.values))
             change_match = re.search(r'([+-]\d+\.\d+\s\([+-]?\d+\.?\d*%\))', full_row_str)
             change_display = change_match.group(1) if change_match else "0.00 (0%)"
             
-            # 3. Форматируем объем (теперь чистит запятые)
+            # Применяем новое форматирование объема
             vol_formatted = format_volume(row.get('Volume', '-'))
             
             emoji = "🟢" if is_gainers else "🔴"
             btn_text = f"{emoji} {sym:5} | ${price_raw} {change_display} | Vol: {vol_formatted}"
-            
             btn = types.InlineKeyboardButton(btn_text, callback_data=f"t_info_{sym}")
             markup.add(btn)
         
@@ -215,10 +226,5 @@ def handle_all_messages(message):
         else: bot.send_message(message.chat.id, "❌ Тикер не найден.")
 
 if __name__ == "__main__":
-    # Запуск Flask в отдельном потоке (критично для Render)
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    logger.info("Бот запускается...")
-    # Стабильный цикл polling для серверов
+    Thread(target=run_flask, daemon=True).start()
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
