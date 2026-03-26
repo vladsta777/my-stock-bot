@@ -63,11 +63,9 @@ def get_ticker_info(ticker_symbol):
         info = stock.info
         if not info or ('currentPrice' not in info and 'regularMarketPrice' not in info): return None
 
-        # Расчет изменения за день (%)
         day_change = info.get('regularMarketChangePercent', 0)
         change_emoji = "🟢" if day_change >= 0 else "🔴"
 
-        # Расчет ATR (за 14 дней)
         hist = stock.history(period="20d")
         atr = (hist['High'] - hist['Low']).tail(14).mean() if len(hist) > 0 else 0
 
@@ -77,11 +75,9 @@ def get_ticker_info(ticker_symbol):
         if calendar and 'Earnings Date' in calendar:
             next_report = calendar['Earnings Date'][0].strftime('%d.%m')
         
-        # 1. Текущий прогноз
         forecast = info.get('earningsEstimateNextQuarter') or "N/A"
         forecast_str = f"{forecast:.2f}" if isinstance(forecast, (int, float)) else "N/A"
 
-        # 2. Прошлый результат (Факт из истории или trailingEps)
         prev_actual_str = "N/A"
         try:
             earn_hist = stock.earnings_history
@@ -110,7 +106,8 @@ def get_ticker_info(ticker_symbol):
         return text
     except: return None
 
-def get_market_data(category):
+def send_market_data(message, category):
+    """Парсинг данных и отправка сообщения с инлайн-кнопками тикеров"""
     try:
         url = f"https://finance.yahoo.com/markets/stocks/{category}/"
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -118,16 +115,22 @@ def get_market_data(category):
         df = dfs[0].head(10)
         
         emoji = "🟢" if category == "gainers" else "🔴"
-        lines = [f"📊 <b>TOP {category.upper()}:</b>\n"]
+        title = f"📊 <b>TOP {category.upper()}:</b>\n<i>Нажми на тикер для быстрого анализа:</i>"
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = []
         
         for _, row in df.iterrows():
             sym = row['Symbol']
-            price = row['Price']
             chg = row.get('% Change', row.get('Change', '0%'))
-            lines.append(f"{emoji} <a href='https://finance.yahoo.com/quote/{sym}'>{sym:5}</a> | <b>${price}</b> (<code>{chg}</code>)")
+            # Текст кнопки: Тикер + Изменение, Callback: сам тикер
+            btn = types.InlineKeyboardButton(f"{sym} ({chg})", callback_data=f"t_info_{sym}")
+            buttons.append(btn)
         
-        return "\n".join(lines)
-    except: return "❌ Ошибка данных."
+        markup.add(*buttons)
+        bot.send_message(message.chat.id, title, parse_mode="HTML", reply_markup=markup)
+    except:
+        bot.send_message(message.chat.id, "❌ Ошибка данных.")
 
 # --- ОБРАБОТКА ---
 
@@ -137,9 +140,19 @@ def get_main_menu():
     markup.row("🚀 Top Gainers", "📉 Top Losers")
     return markup
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('t_info_'))
+def handle_ticker_callback(call):
+    """Обработка клика по кнопке тикера в списках лидеров"""
+    ticker = call.data.replace('t_info_', '')
+    res = get_ticker_info(ticker)
+    if res:
+        bot.send_message(call.message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        bot.answer_callback_query(call.id, "❌ Ошибка загрузки данных тикера.")
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v8.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v9.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
@@ -153,7 +166,7 @@ def handle_all_messages(message):
     
     elif "Top" in text:
         cat = "gainers" if "Gainers" in text else "losers"
-        bot.send_message(message.chat.id, get_market_data(cat), parse_mode="HTML", disable_web_page_preview=True)
+        send_market_data(message, cat)
     
     elif re.fullmatch(r'[A-Za-z]{1,5}', text):
         res = get_ticker_info(text)
