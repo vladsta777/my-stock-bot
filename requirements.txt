@@ -1,8 +1,8 @@
-pyTelegramBotAPI
-yfinance
-flask
-requests
-pandas
+pyTelegramBotAPI>=4.13.0
+pandas>=2.0.0
 lxml
 html5lib
+flask
+requests
 waitress
+yfinance
