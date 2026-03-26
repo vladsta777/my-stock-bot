@@ -7,7 +7,7 @@ from threading import Thread
 from waitress import serve
 import logging
 
-# 1. Настройка логирования (ты увидишь всё в Logs на Render)
+# 1. Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -29,11 +29,12 @@ bot = telebot.TeleBot(TOKEN)
 
 def get_market_data(category):
     try:
+        # ОБНОВЛЕННЫЕ ССЫЛКИ: теперь ведут на разделы Gainers/Losers за 52 недели
         urls = {
             "gainers": "https://finance.yahoo.com/markets/stocks/gainers/",
             "losers": "https://finance.yahoo.com/markets/stocks/losers/",
-            "high": "https://finance.yahoo.com/markets/stocks/52-week-highs/",
-            "low": "https://finance.yahoo.com/markets/stocks/52-week-lows/"
+            "high": "https://finance.yahoo.com/markets/stocks/52-week-gainers/",
+            "low": "https://finance.yahoo.com/markets/stocks/52-week-losers/"
         }
         
         headers = {
@@ -42,21 +43,29 @@ def get_market_data(category):
         
         # Читаем таблицу
         dfs = pd.read_html(urls[category], storage_options=headers)
+        if not dfs:
+            return "❌ Таблицы не найдены."
+            
         df = dfs[0].head(10)
 
         lines = []
         for _, row in df.iterrows():
             ticker = str(row['Symbol'])
             price = row['Price']
-            change = row.get('% Change', row.get('Change', 'N/A'))
+            
+            # Проверяем разные варианты названия колонки с процентами
+            change = row.get('52 Week % Change', row.get('% Change', row.get('Change', 'N/A')))
             
             yahoo_link = f"https://finance.yahoo.com/quote/{ticker}"
+            
+            # Эмодзи: для лидеров роста за год тоже ставим зеленый
             emoji = "🟢" if category in ["gainers", "high"] else "🔴"
+            
             lines.append(f"{emoji} <a href='{yahoo_link}'>{ticker:5}</a> | <b>${price}</b> (<code>{change}</code>)")
 
         titles = {
-            "gainers": "🚀 <b>Top 10 Gainers (US)</b>",
-            "losers": "📉 <b>Top 10 Losers (US)</b>",
+            "gainers": "🚀 <b>Top 10 Gainers (Daily)</b>",
+            "losers": "📉 <b>Top 10 Losers (Daily)</b>",
             "high": "📈 <b>52 Week Gainers</b>",
             "low": "🧊 <b>52 Week Losers</b>"
         }
@@ -76,7 +85,7 @@ def send_welcome(message):
     
     bot.send_message(
         message.chat.id, 
-        "📊 <b>Market Terminal v3.6</b>\n\nВыберите категорию:", 
+        "📊 <b>Market Terminal v3.7</b>\n\nВыберите категорию:", 
         parse_mode="HTML", 
         reply_markup=markup,
         disable_web_page_preview=True
@@ -93,24 +102,25 @@ def handle_menu(message):
     
     if message.text in mapping:
         logger.info(f"Запрос {message.text} от {message.chat.id}")
-        status_msg = bot.send_message(message.chat.id, "⌛ <i>Загрузка...</i>", parse_mode="HTML")
+        status_msg = bot.send_message(message.chat.id, "⌛ <i>Сборка данных Yahoo...</i>", parse_mode="HTML")
+        
         response = get_market_data(mapping[message.text])
+        
         bot.delete_message(message.chat.id, status_msg.message_id)
         bot.send_message(message.chat.id, response, parse_mode="HTML", disable_web_page_preview=True)
 
 # 4. Точка входа
 if __name__ == "__main__":
-    # Сначала запускаем Flask в отдельном потоке
     t = Thread(target=run_flask)
     t.daemon = True
     t.start()
     
     logger.info(">>> Бот запускает Polling...")
     
-    # Основной поток отдаем боту (это надежнее всего)
     while True:
         try:
-            bot.polling(none_stop=True, interval=0, timeout=20)
+            # skip_pending=True обязателен, чтобы бот не «захлебнулся» старыми сообщениями
+            bot.polling(none_stop=True, interval=0, timeout=20, skip_pending=True)
         except Exception as e:
             logger.error(f"Ошибка Polling: {e}")
             import time
