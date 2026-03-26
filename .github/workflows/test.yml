@@ -1,0 +1,16 @@
+name: Test Stock Bot
+on: workflow_dispatch # Позволяет запускать бота вручную кнопкой
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: pip install yfinance requests
+      - name: Run Script
+        run: python bot.py
