@@ -41,6 +41,7 @@ def get_market_data(category):
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
         
+        # Загрузка данных
         dfs = pd.read_html(urls[category], storage_options=headers)
         if not dfs:
             return "❌ Таблицы не найдены."
@@ -51,6 +52,7 @@ def get_market_data(category):
         for _, row in df.iterrows():
             ticker = str(row['Symbol'])
             price = row['Price']
+            # Проверка разных вариантов имен колонок Yahoo
             change = row.get('52 Week % Change', row.get('% Change', row.get('Change', 'N/A')))
             
             yahoo_link = f"https://finance.yahoo.com/quote/{ticker}"
@@ -70,7 +72,7 @@ def get_market_data(category):
         logger.error(f"Ошибка Yahoo: {e}")
         return "❌ <i>Данные временно недоступны.</i>"
 
-# Универсальная функция для актуальной клавиатуры
+# Функция формирования клавиатуры
 def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("🚀 Top Gainers", "📉 Top Losers")
@@ -82,7 +84,7 @@ def send_welcome(message):
     logger.info(f"Команда /start от {message.chat.id}")
     bot.send_message(
         message.chat.id, 
-        "📊 <b>Market Terminal v3.9</b>\n\nВыберите категорию для анализа рынка США:", 
+        "📊 <b>Market Terminal v4.0</b>\n\nВыберите категорию для анализа рынка США:", 
         parse_mode="HTML", 
         reply_markup=get_main_menu(),
         disable_web_page_preview=True
@@ -97,7 +99,6 @@ def handle_menu(message):
         "🧊 52 Week Losers": "low"
     }
     
-    # ПРОВЕРКА: Нажал ли пользователь на актуальную кнопку?
     if message.text in mapping:
         logger.info(f"Запрос {message.text} от {message.chat.id}")
         status_msg = bot.send_message(message.chat.id, "⌛ <i>Сборка данных Yahoo...</i>", parse_mode="HTML")
@@ -105,40 +106,46 @@ def handle_menu(message):
         response = get_market_data(mapping[message.text])
         
         bot.delete_message(message.chat.id, status_msg.message_id)
-        # Отправляем данные И новое меню (на случай, если кнопки "залипли")
+        # Принудительно обновляем клавиатуру при каждом ответе (лечение залипания)
         bot.send_message(message.chat.id, response, parse_mode="HTML", 
                          reply_markup=get_main_menu(), disable_web_page_preview=True)
     else:
-        # ЛЕЧЕНИЕ: Если пришел старый текст кнопки или любой другой текст
-        logger.warning(f"Получен неизвестный текст: {message.text}. Обновляю меню.")
+        # Если пришла кнопка со старым текстом (например, "New High") или просто текст
+        logger.warning(f"Неизвестный текст: {message.text}. Исправляю кнопки.")
         bot.send_message(
             message.chat.id, 
-            "🔄 <b>Меню было обновлено!</b>\nПожалуйста, используйте кнопки ниже для работы с терминалом.", 
+            "🔄 <b>Кнопки обновлены!</b>\nПожалуйста, используйте актуальное меню:", 
             parse_mode="HTML",
             reply_markup=get_main_menu()
         )
 
 # 4. Точка входа
 if __name__ == "__main__":
-    # Запуск веб-сервера
+    # Запуск сервера
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    # ПРИНУДИТЕЛЬНАЯ ОЧИСТКА СОЕДИНЕНИЙ
-    logger.info(">>> Сброс вебхуков и старых сессий Telegram...")
-    bot.remove_webhook(drop_pending_updates=True)
+    logger.info(">>> Очистка сессий Telegram...")
+    try:
+        # Попытка удалить вебхук с очисткой очереди (для новых версий библиотеки)
+        bot.remove_webhook(drop_pending_updates=True)
+    except TypeError:
+        # Если библиотека старая и не знает про drop_pending_updates
+        bot.remove_webhook()
+        bot.get_updates(offset=-1) # Ручная очистка очереди
+    
     time.sleep(3) # Пауза перед стартом, чтобы избежать 409 Conflict
     
-    logger.info(">>> Бот запускает Polling...")
+    logger.info(">>> Бот запущен и готов к работе!")
     
     while True:
         try:
-            # Увеличен timeout для стабильности на Render
+            # Используем infinity_polling как более современный аналог polling
             bot.polling(none_stop=True, interval=1, timeout=60)
         except Exception as e:
             if "Conflict" in str(e):
-                logger.warning("⚠️ Конфликт 409. Ожидание 20 сек...")
-                time.sleep(20) # Ждем, пока Render прибьет старый контейнер
+                logger.warning("⚠️ Конфликт 409. Жду 20 сек пока Render закроет старую копию...")
+                time.sleep(20)
             else:
                 logger.error(f"Ошибка Polling: {e}")
                 time.sleep(5)
