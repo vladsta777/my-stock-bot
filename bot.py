@@ -89,3 +89,9 @@ if __name__ == "__main__":
     t = Thread(target=run_flask)
     t.start()
     bot.infinity_polling()
+if __name__ == "__main__":
+    t = Thread(target=run_flask)
+    t.start()
+    print("Бот запущен...")
+    # non_stop=True поможет боту переподключиться, если связь оборвется
+    bot.infinity_polling(non_stop=True, skip_pending=True)
