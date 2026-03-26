@@ -35,14 +35,18 @@ DIGEST_TICKERS = {
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
 def format_volume(volume):
-    """Превращает 301801 в 301K, а 2204000 в 2.2M"""
+    """Превращает 2204000 в 2.2M, а 301801 в 301K"""
     try:
-        val_str = str(volume).replace(',', '').replace('M', '').replace('K', '').replace('$', '')
+        # Очищаем строку от запятых и лишних символов, чтобы корректно перевести в число
+        val_str = re.sub(r'[^\d.]', '', str(volume))
         val = float(val_str)
-        if val >= 1e6: return f"{val/1e6:.1f}M"
-        if val >= 1e3: return f"{int(val/1e3)}K"
+        if val >= 1_000_000:
+            return f"{val/1_000_000:.1f}M"
+        if val >= 1_000:
+            return f"{int(val/1_000)}K"
         return str(int(val))
-    except: return str(volume)
+    except:
+        return str(volume)
 
 # --- ФУНКЦИИ ---
 
@@ -150,16 +154,16 @@ def send_market_data(message, category):
         for _, row in df.iterrows():
             sym = str(row['Symbol'])
             
-            # Извлекаем чистую цену (до знаков + или -)
+            # Извлекаем цену, убирая всё лишнее после первого числа
             price_raw = str(row['Price']).split('+')[0].split('-')[0].replace('$', '').strip()
             
-            # Собираем формат: +1.29 (+8.19%)
-            change_col = str(row.get('Change', ''))
-            # Ищем подстроку с изменением и процентами в скобках
-            change_match = re.search(r'([+-]\d+\.\d+\s\([+-]?\d+\.?\d*%\))', change_col)
+            # Ищем изменение (доллары + проценты в скобках) во всей строке данных
+            # Это исключает появление нулей, если Yahoo переставил колонки
+            full_row_str = " ".join(map(str, row.values))
+            change_match = re.search(r'([+-]\d+\.\d+\s\([+-]?\d+\.?\d*%\))', full_row_str)
             change_display = change_match.group(1) if change_match else "0.00 (0%)"
             
-            # Сокращаем объем (K/M)
+            # Форматируем объем (теперь миллионы будут с буквой M)
             vol_formatted = format_volume(row.get('Volume', '-'))
             
             emoji = "🟢" if is_gainers else "🔴"
