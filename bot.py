@@ -5,20 +5,25 @@ import os
 from flask import Flask
 from threading import Thread
 from waitress import serve
-import time
+import logging
 
-# 1. Мини-сервер
+# 1. Настройка логирования (ты увидишь всё в Logs на Render)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 2. Мини-сервер для UptimeRobot
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Market Bot is Running"
+    return "OK"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
+    logger.info(f"Запуск Waitress на порту {port}")
     serve(app, host='0.0.0.0', port=port)
 
-# 2. Настройка бота
+# 3. Настройка бота
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
@@ -32,14 +37,11 @@ def get_market_data(category):
         }
         
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
         
-        # Читаем таблицу (добавил timeout, чтобы запросы не висели вечно)
+        # Читаем таблицу
         dfs = pd.read_html(urls[category], storage_options=headers)
-        if not dfs:
-            return "❌ Таблицы не найдены."
-            
         df = dfs[0].head(10)
 
         lines = []
@@ -50,7 +52,6 @@ def get_market_data(category):
             
             yahoo_link = f"https://finance.yahoo.com/quote/{ticker}"
             emoji = "🟢" if category in ["gainers", "high"] else "🔴"
-            
             lines.append(f"{emoji} <a href='{yahoo_link}'>{ticker:5}</a> | <b>${price}</b> (<code>{change}</code>)")
 
         titles = {
@@ -63,11 +64,12 @@ def get_market_data(category):
         return f"{titles[category]}\n\n" + "\n".join(lines)
 
     except Exception as e:
-        print(f"Ошибка Yahoo: {e}")
-        return "❌ <i>Ошибка получения данных. Попробуйте снова.</i>"
+        logger.error(f"Ошибка Yahoo: {e}")
+        return "❌ <i>Данные временно недоступны.</i>"
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    logger.info(f"Команда /start от {message.chat.id}")
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("🚀 Top Gainers", "📉 Top Losers")
     markup.row("📈 52 Week Gainers", "🧊 52 Week Losers")
@@ -90,20 +92,26 @@ def handle_menu(message):
     }
     
     if message.text in mapping:
-        try:
-            status_msg = bot.send_message(message.chat.id, "⌛ <i>Загрузка...</i>", parse_mode="HTML")
-            response = get_market_data(mapping[message.text])
-            bot.delete_message(message.chat.id, status_msg.message_id)
-            bot.send_message(message.chat.id, response, parse_mode="HTML", disable_web_page_preview=True)
-        except Exception as e:
-            print(f"Ошибка в handle_menu: {e}")
+        logger.info(f"Запрос {message.text} от {message.chat.id}")
+        status_msg = bot.send_message(message.chat.id, "⌛ <i>Загрузка...</i>", parse_mode="HTML")
+        response = get_market_data(mapping[message.text])
+        bot.delete_message(message.chat.id, status_msg.message_id)
+        bot.send_message(message.chat.id, response, parse_mode="HTML", disable_web_page_preview=True)
 
+# 4. Точка входа
 if __name__ == "__main__":
-    # Запуск Flask
-    t = Thread(target=run_flask, daemon=True)
+    # Сначала запускаем Flask в отдельном потоке
+    t = Thread(target=run_flask)
+    t.daemon = True
     t.start()
     
-    print(">>> Бот запущен...")
+    logger.info(">>> Бот запускает Polling...")
     
-    # Упрощенный запуск поллинга — infinity_polling сам умеет перезапускаться
-    bot.infinity_polling(non_stop=True, skip_pending=True, timeout=60, long_polling_timeout=20)
+    # Основной поток отдаем боту (это надежнее всего)
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0, timeout=20)
+        except Exception as e:
+            logger.error(f"Ошибка Polling: {e}")
+            import time
+            time.sleep(5)
