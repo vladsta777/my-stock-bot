@@ -3,8 +3,8 @@ import requests
 import os
 
 # Вставьте ваши данные здесь для теста (но для постоянной работы лучше через Secrets)
-TOKEN = "8760265107:AAGItxo4kqnkIBU5PhP1JEo0bY84g3Y5RL4"
-CHAT_ID = "ВАШ_ID" # Сюда вставьте свой цифровой ID (например, 12345678)
+TOKEN = "8760265107:AAHdcj9Ls_2-c27OFkqV67MRhI2E9SBYxUs"
+CHAT_ID = "154150415" # Сюда вставьте свой цифровой ID (например, 12345678)
 STOCKS = ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL"]
 
 def get_stock_report(tickers):
