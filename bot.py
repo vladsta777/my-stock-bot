@@ -2,6 +2,7 @@ import telebot
 from telebot import types
 import yfinance as yf
 import os
+import pandas as pd
 from flask import Flask
 from threading import Thread
 
@@ -20,74 +21,58 @@ def run_flask():
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
-# Список акций для мониторинга
-TICKERS = ["AAPL", "TSLA", "NVDA", "MSFT", "AMD", "GOOGL", "AMZN", "META", "NFLX", "COIN"]
-
 def get_market_data(category):
-    results = []
-    
-    for t in TICKERS:
-        try:
-            stock = yf.Ticker(t)
-            if category in ["gainers", "losers"]:
-                df = stock.history(period="2d")
-                if len(df) >= 2:
-                    last = df['Close'].iloc[-1]
-                    prev = df['Close'].iloc[-2]
-                    pct = ((last - prev) / prev) * 100
-                    results.append({"ticker": t, "price": last, "change": pct})
+    try:
+        # Ссылки на актуальные скринеры Yahoo Finance
+        urls = {
+            "gainers": "https://finance.yahoo.com/markets/stocks/gainers/",
+            "losers": "https://finance.yahoo.com/markets/stocks/losers/",
+            "high": "https://finance.yahoo.com/markets/stocks/52-week-highs/",
+            "low": "https://finance.yahoo.com/markets/stocks/52-week-lows/"
+        }
+        
+        titles = {
+            "gainers": "🚀 <b>Top 10 Gainers (US Market)</b>",
+            "losers": "📉 <b>Top 10 Losers (US Market)</b>",
+            "high": "📈 <b>Top 10 New 52W Highs</b>",
+            "low": "🧊 <b>Top 10 New 52W Lows</b>"
+        }
+
+        # Читаем таблицу с сайта (pandas делает это за один запрос)
+        tables = pd.read_html(urls[category])
+        df = tables[0].head(10) # Берем топ-10 актуальных акций
+
+        lines = []
+        for _, row in df.iterrows():
+            ticker = row['Symbol']
+            price = f"{row['Price']:.2f}" if isinstance(row['Price'], (int, float)) else row['Price']
             
-            elif category in ["high", "low"]:
-                info = stock.info
-                current = info.get('currentPrice') or info.get('regularMarketPrice')
-                if category == "high":
-                    h52 = info.get('fiftyTwoWeekHigh')
-                    if current and h52 and current >= h52 * 0.98:
-                        results.append(f"🔥 <code>{t:5}</code>: <b>${current:.2f}</b> (Пик: ${h52:.2f})")
-                else:
-                    l52 = info.get('fiftyTwoWeekLow')
-                    if current and l52 and current <= l52 * 1.02:
-                        results.append(f"🧊 <code>{t:5}</code>: <b>${current:.2f}</b> (Дно: ${l52:.2f})")
-        except:
-            continue
+            # Определяем изменение (для разных таблиц колонки могут чуть отличаться)
+            change = row.get('% Change', row.get('Change', ''))
+            
+            emoji = "🟢" if category in ["gainers", "high"] else "🔴"
+            lines.append(f"{emoji} <code>{ticker:5}</code>: <b>${price}</b> (<code>{change}</code>)")
 
-    if category == "gainers":
-        results.sort(key=lambda x: x['change'], reverse=True)
-        lines = [f"🟢 <code>{item['ticker']:5}</code>: <b>${item['price']:.2f}</b> (<code>{item['change']:+.2f}%</code>)" for item in results[:5]]
-        title = "🚀 <b>Top Gainers</b>"
-    elif category == "losers":
-        results.sort(key=lambda x: x['change'])
-        lines = [f"🔴 <code>{item['ticker']:5}</code>: <b>${item['price']:.2f}</b> (<code>{item['change']:+.2f}%</code>)" for item in results[:5]]
-        title = "📉 <b>Top Losers</b>"
-    elif category == "high":
-        title = "📈 <b>New 52W High</b>"
-        lines = results[:5]
-    else:
-        title = "📉 <b>New 52W Low</b>"
-        lines = results[:5]
+        return f"{titles[category]}\n\n" + "\n".join(lines)
 
-    if not lines:
-        return f"{title}\n\n<i>Нет данных по списку наблюдения</i>"
-    
-    return f"{title}\n\n" + "\n".join(lines)
+    except Exception as e:
+        print(f"Error: {e}")
+        return "❌ <i>Не удалось получить данные с биржи. Попробуйте позже.</i>"
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    # Явно задаем структуру рядов
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    
     btn1 = types.KeyboardButton("🚀 Top Gainers")
     btn2 = types.KeyboardButton("📉 Top Losers")
     btn3 = types.KeyboardButton("📈 New High")
     btn4 = types.KeyboardButton("📉 New Low")
     
-    # Добавляем по две кнопки в ряд
     markup.row(btn1, btn2)
     markup.row(btn3, btn4)
     
     bot.send_message(
         message.chat.id, 
-        "<b>Ассистент фондового рынка США</b>\n\nВыберите категорию данных:", 
+        "<b>Market Terminal США</b>\n\nАктуальные данные по всему рынку:", 
         parse_mode="HTML", 
         reply_markup=markup
     )
@@ -95,7 +80,7 @@ def send_welcome(message):
 @bot.message_handler(func=lambda m: True)
 def handle_menu(message):
     chat_id = message.chat.id
-    text = message.text.strip() # Убираем лишние пробелы
+    text = message.text.strip()
     
     mapping = {
         "🚀 Top Gainers": "gainers",
@@ -105,12 +90,4 @@ def handle_menu(message):
     }
     
     if text in mapping:
-        bot.send_message(chat_id, "⌛ <i>Загружаю данные...</i>", parse_mode="HTML")
-        response = get_market_data(mapping[text])
-        bot.send_message(chat_id, response, parse_mode="HTML")
-
-if __name__ == "__main__":
-    t = Thread(target=run_flask)
-    t.start()
-    print("Бот запущен...")
-    bot.infinity_polling()
+        bot.send_message(chat_id, "⌛ <i>Анализирую рынок
