@@ -88,22 +88,21 @@ def get_ticker_info(ticker_symbol):
             prev_actual = info.get('trailingEps', "N/A")
             prev_actual_str = f"{prev_actual:.2f}" if isinstance(prev_actual, (int, float)) else "N/A"
 
-        # --- ЛОГИКА НОВОСТЕЙ С ВРЕМЕНЕМ ---
-        last_news_text = "🗞 <i>Новостей не найдено</i>"
+        # --- ОБНОВЛЕННАЯ ЛОГИКА: 3 ПОСЛЕДНИЕ НОВОСТИ (БЕЗ ВРЕМЕНИ) ---
+        news_lines = ["🗞 <b>Последние новости:</b>"]
         try:
             news = stock.news
-            if news:
-                latest = news[0]
-                title = latest.get('title')
-                link = latest.get('link')
-                pub_time_unix = latest.get('providerPublishTime')
-                if pub_time_unix:
-                    # Конвертируем время публикации
-                    pub_time = datetime.fromtimestamp(pub_time_unix).strftime('%d.%m %H:%M')
-                    last_news_text = f"🗞 <b>Новость ({pub_time}):</b>\n<a href='{link}'>{title}</a>"
-                else:
-                    last_news_text = f"🗞 <b>Последняя новость:</b>\n<a href='{link}'>{title}</a>"
-        except: pass
+            if news and len(news) > 0:
+                for item in news[:3]: # Берем 3 новости
+                    n_title = item.get('title', 'Новость без заголовка')
+                    n_link = item.get('link', '#')
+                    news_lines.append(f"• <a href='{n_link}'>{n_title}</a>")
+            else:
+                news_lines.append("<i>Новостей не найдено</i>")
+        except:
+            news_lines.append("<i>Ошибка загрузки новостей</i>")
+        
+        last_news_text = "\n".join(news_lines)
 
         text = (
             f"🔍 <b>{info.get('longName', ticker_symbol)} ({ticker_symbol})</b>\n"
@@ -126,26 +125,32 @@ def get_ticker_info(ticker_symbol):
     except: return None
 
 def send_market_data(message, category):
-    """Парсинг данных и отправка сообщения с инлайн-кнопками тикеров"""
+    """Парсинг данных и отправка сообщения с информативными кнопками в один столбец"""
     try:
         url = f"https://finance.yahoo.com/markets/stocks/{category}/"
         headers = {"User-Agent": "Mozilla/5.0"}
         dfs = pd.read_html(url, storage_options=headers)
         df = dfs[0].head(10)
         
-        emoji = "🟢" if category == "gainers" else "🔴"
-        title = f"📊 <b>TOP {category.upper()}:</b>\n<i>Нажми на тикер для быстрого анализа:</i>"
+        title = f"📊 <b>TOP {category.upper()}:</b>\n<i>Нажми для быстрого анализа:</i>"
         
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        buttons = []
+        markup = types.InlineKeyboardMarkup(row_width=1)
         
         for _, row in df.iterrows():
             sym = row['Symbol']
+            price = row['Price']
             chg = row.get('% Change', row.get('Change', '0%'))
-            btn = types.InlineKeyboardButton(f"{sym} ({chg})", callback_data=f"t_info_{sym}")
-            buttons.append(btn)
+            vol = row.get('Volume', '-')
+            
+            # Эмодзи направления
+            emoji = "🟢" if "-" not in str(chg) else "🔴"
+            
+            # Текст кнопки: Тикер | Цена | Изменение | Объем
+            btn_text = f"{emoji} {sym:5} | ${price} | {chg} | Vol: {vol}"
+            
+            btn = types.InlineKeyboardButton(btn_text, callback_data=f"t_info_{sym}")
+            markup.add(btn)
         
-        markup.add(*buttons)
         bot.send_message(message.chat.id, title, parse_mode="HTML", reply_markup=markup)
     except:
         bot.send_message(message.chat.id, "❌ Ошибка данных.")
@@ -160,17 +165,16 @@ def get_main_menu():
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('t_info_'))
 def handle_ticker_callback(call):
-    """Обработка клика по кнопке тикера в списках лидеров"""
     ticker = call.data.replace('t_info_', '')
     res = get_ticker_info(ticker)
     if res:
         bot.send_message(call.message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
     else:
-        bot.answer_callback_query(call.id, "❌ Ошибка загрузки данных тикера.")
+        bot.answer_callback_query(call.id, "❌ Ошибка загрузки.")
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v11.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v13.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
@@ -186,7 +190,7 @@ def handle_all_messages(message):
         cat = "gainers" if "Gainers" in text else "losers"
         send_market_data(message, cat)
     
-    elif re.fullmatch(r'[A-Za-z]{1,5}', text):
+    elif re.fullmatch(r'[A-Za-z0-9.=]{1,10}', text):
         res = get_ticker_info(text)
         if res: bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
         else: bot.send_message(message.chat.id, "❌ Тикер не найден.")
