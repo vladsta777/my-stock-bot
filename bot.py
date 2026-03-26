@@ -40,11 +40,9 @@ def format_volume(volume):
     """Исправлено: берет число до и одну цифру после запятой/точки, добавляя M или K."""
     try:
         val_str = str(volume).upper()
-        # Если Yahoo уже прислал с буквой, оставляем
         if 'M' in val_str or 'K' in val_str:
             return val_str
             
-        # Очищаем от запятых и прочего
         clean_val = re.sub(r'[^\d.]', '', val_str)
         if not clean_val: return str(volume)
         
@@ -112,7 +110,6 @@ def get_ticker_info(ticker_symbol):
             prev_actual = info.get('trailingEps', "N/A")
             prev_actual_str = f"{prev_actual:.2f}" if isinstance(prev_actual, (int, float)) else "N/A"
 
-        # --- НОВОСТИ С MARKETWATCH ---
         news_lines = ["🗞 <b>MarketWatch News:</b>"]
         try:
             mw_url = f"https://www.marketwatch.com/investing/stock/{ticker_symbol}"
@@ -158,6 +155,8 @@ def get_ticker_info(ticker_symbol):
     except: return None
 
 def send_market_data(message, category):
+    # Временное сообщение
+    wait_msg = bot.send_message(message.chat.id, "⏳ <b>Получаю список лидеров...</b>", parse_mode="HTML")
     try:
         url = f"https://finance.yahoo.com/markets/stocks/{category}/"
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -175,8 +174,6 @@ def send_market_data(message, category):
             full_row_str = " ".join(map(str, row.values))
             change_match = re.search(r'([+-]\d+\.\d+\s\([+-]?\d+\.?\d*%\))', full_row_str)
             change_display = change_match.group(1) if change_match else "0.00 (0%)"
-            
-            # Применяем новое форматирование объема
             vol_formatted = format_volume(row.get('Volume', '-'))
             
             emoji = "🟢" if is_gainers else "🔴"
@@ -184,8 +181,10 @@ def send_market_data(message, category):
             btn = types.InlineKeyboardButton(btn_text, callback_data=f"t_info_{sym}")
             markup.add(btn)
         
+        bot.delete_message(message.chat.id, wait_msg.message_id)
         bot.send_message(message.chat.id, title, parse_mode="HTML", reply_markup=markup)
     except Exception as e:
+        bot.delete_message(message.chat.id, wait_msg.message_id)
         logger.error(f"Market data error: {e}")
         bot.send_message(message.chat.id, "❌ Ошибка данных.")
 
@@ -200,7 +199,10 @@ def get_main_menu():
 @bot.callback_query_handler(func=lambda call: call.data.startswith('t_info_'))
 def handle_ticker_callback(call):
     ticker = call.data.replace('t_info_', '')
+    # Временное сообщение
+    wait_msg = bot.send_message(call.message.chat.id, f"⏳ <b>Загружаю данные по {ticker}...</b>", parse_mode="HTML")
     res = get_ticker_info(ticker)
+    bot.delete_message(call.message.chat.id, wait_msg.message_id)
     if res:
         bot.send_message(call.message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
     else:
@@ -214,14 +216,19 @@ def send_welcome(message):
 def handle_all_messages(message):
     text = message.text
     if text == "📰 Обзор на сегодня":
-        bot.send_message(message.chat.id, get_daily_digest(), parse_mode="HTML", disable_web_page_preview=True)
+        wait_msg = bot.send_message(message.chat.id, "⏳ <b>Формирую сводку...</b>", parse_mode="HTML")
+        res = get_daily_digest()
+        bot.delete_message(message.chat.id, wait_msg.message_id)
+        bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
     elif text == "🔍 Поиск по тикеру":
         bot.send_message(message.chat.id, "✍️ Введите тикер (например, AAPL):")
     elif "Top" in text:
         cat = "gainers" if "Gainers" in text else "losers"
         send_market_data(message, cat)
     elif re.fullmatch(r'[A-Za-z0-9.=]{1,10}', text):
+        wait_msg = bot.send_message(message.chat.id, f"⏳ <b>Ищу {text.upper()}...</b>", parse_mode="HTML")
         res = get_ticker_info(text)
+        bot.delete_message(message.chat.id, wait_msg.message_id)
         if res: bot.send_message(message.chat.id, res, parse_mode="HTML", disable_web_page_preview=True)
         else: bot.send_message(message.chat.id, "❌ Тикер не найден.")
 
