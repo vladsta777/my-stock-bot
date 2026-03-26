@@ -32,6 +32,16 @@ DIGEST_TICKERS = {
     "Dow Jones": "YM=F", "S&P 500": "ES=F", "Nasdaq 100": "NQ=F", "Russell 2000": "RTY=F"
 }
 
+# --- Вспомогательная функция для объема ---
+def format_volume(volume):
+    """Превращает 301801 в 301K, а 2204000 в 2.2M"""
+    try:
+        val = float(str(volume).replace(',', ''))
+        if val >= 1e6: return f"{val/1e6:.1f}M"
+        if val >= 1e3: return f"{int(val/1e3)}K"
+        return str(int(val))
+    except: return str(volume)
+
 # --- ФУНКЦИИ ---
 
 def get_daily_digest():
@@ -69,7 +79,6 @@ def get_ticker_info(ticker_symbol):
         hist = stock.history(period="20d")
         atr = (hist['High'] - hist['Low']).tail(14).mean() if len(hist) > 0 else 0
 
-        # --- ЛОГИКА EARNINGS ---
         calendar = stock.calendar
         next_report = "N/A"
         if calendar and 'Earnings Date' in calendar:
@@ -88,7 +97,6 @@ def get_ticker_info(ticker_symbol):
             prev_actual = info.get('trailingEps', "N/A")
             prev_actual_str = f"{prev_actual:.2f}" if isinstance(prev_actual, (int, float)) else "N/A"
 
-        # --- ОБНОВЛЕННАЯ ЛОГИКА: 3 ПОСЛЕДНИЕ НОВОСТИ (БЕЗ ВРЕМЕНИ) ---
         news_lines = ["🗞 <b>Последние новости:</b>"]
         try:
             news = stock.news
@@ -125,7 +133,6 @@ def get_ticker_info(ticker_symbol):
     except: return None
 
 def send_market_data(message, category):
-    """Парсинг данных и отправка сообщения с информативными кнопками в один столбец"""
     try:
         url = f"https://finance.yahoo.com/markets/stocks/{category}/"
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -139,17 +146,22 @@ def send_market_data(message, category):
         markup = types.InlineKeyboardMarkup(row_width=1)
         
         for _, row in df.iterrows():
-            sym = row['Symbol']
-            price = row['Price']
-            # Используем только % Change для чистоты данных на кнопке
-            chg_pct = row.get('% Change', '0%')
-            vol = row.get('Volume', '-')
+            sym = str(row['Symbol'])
+            # Очистка цены (убираем прилипшие изменения)
+            price_raw = str(row['Price']).split('+')[0].split('-')[0].replace('$', '').strip()
             
-            # Эмодзи направления (зеленый для Gainers, красный для Losers)
+            # Извлекаем процент из скобок (избавляемся от лишних цифр перед Vol)
+            change_col = str(row.get('Change', '0%'))
+            pct_match = re.search(r'\((.*?)\)', change_col)
+            pct_val = pct_match.group(1) if pct_match else change_col
+            
+            # Сокращаем объем (301801 -> 301K)
+            vol_formatted = format_volume(row.get('Volume', '-'))
+            
             emoji = "🟢" if is_gainers else "🔴"
             
-            # Текст кнопки: Тикер | Цена | Процент | Объем
-            btn_text = f"{emoji} {sym:5} | ${price} | {chg_pct} | Vol: {vol}"
+            # Финальная чистая кнопка
+            btn_text = f"{emoji} {sym:5} | ${price_raw} | {pct_val} | Vol: {vol_formatted}"
             
             btn = types.InlineKeyboardButton(btn_text, callback_data=f"t_info_{sym}")
             markup.add(btn)
@@ -178,7 +190,7 @@ def handle_ticker_callback(call):
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v14.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v15.0</b>", parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
