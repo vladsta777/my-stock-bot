@@ -13,11 +13,13 @@ import time
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 2. Мини-сервер для UptimeRobot
+# 2. Мини-сервер для UptimeRobot и Health Check
 app = Flask('')
+
 @app.route('/')
-def home(): 
-    return "Market Bot is Active", 200
+def home():
+    # Render увидит этот ответ и поймет, что сервис активен
+    return "Market Bot is Active and Healthy", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -31,7 +33,6 @@ bot = telebot.TeleBot(TOKEN)
 # --- ФУНКЦИИ ДАННЫХ ---
 
 def get_ticker_info(ticker_symbol):
-    """Поиск расширенных данных по тикеру через yfinance"""
     try:
         ticker_symbol = ticker_symbol.upper().strip()
         stock = yf.Ticker(ticker_symbol)
@@ -65,7 +66,6 @@ def get_ticker_info(ticker_symbol):
         return None
 
 def get_market_data(category):
-    """Парсинг таблиц лидеров с Yahoo Finance через pandas"""
     try:
         urls = {
             "gainers": "https://finance.yahoo.com/markets/stocks/gainers/",
@@ -109,7 +109,7 @@ def get_main_menu():
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "📊 <b>Market Terminal v4.6</b>\n\nВыберите категорию или используйте поиск:", 
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v4.7</b>\n\nБот работает 24/7. Выберите категорию или введите тикер:", 
                      parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
@@ -135,10 +135,7 @@ def handle_menu(message):
         bot.send_message(message.chat.id, "🔄 Используйте кнопки меню:", reply_markup=get_main_menu())
 
 def process_ticker_step(message):
-    """Шаг получения текста тикера от пользователя"""
     ticker = message.text.upper().strip()
-    
-    # Проверка: если юзер вместо ввода нажал другую кнопку меню
     menu_cmds = ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 52 WEEK LOSERS", "🔍 ПОИСК ПО ТИКЕРУ"]
     if ticker in menu_cmds:
         handle_menu(message)
@@ -151,12 +148,13 @@ def process_ticker_step(message):
     if response:
         bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
     else:
-        bot.send_message(message.chat.id, f"❌ Тикер <b>{ticker}</b> не найден. Попробуйте еще раз:", 
+        bot.send_message(message.chat.id, f"❌ Тикер <b>{ticker}</b> не найден.", 
                          parse_mode="HTML", reply_markup=get_main_menu())
 
 # --- ЗАПУСК ---
 
 if __name__ == "__main__":
+    # Запуск Flask в фоне
     Thread(target=run_flask, daemon=True).start()
     
     logger.info(">>> Очистка сессий Telegram...")
@@ -164,18 +162,19 @@ if __name__ == "__main__":
         bot.remove_webhook(drop_pending_updates=True)
     except:
         bot.remove_webhook()
-        bot.get_updates(offset=-1)
     
-    time.sleep(3)
-    logger.info(">>> Бот в эфире!")
+    time.sleep(2)
+    logger.info(">>> Бот запущен в режиме 24/7!")
     
+    # Бесконечный цикл с продвинутым поллингом
     while True:
         try:
-            bot.polling(none_stop=True, interval=1, timeout=60)
+            # infinity_polling сам обрабатывает ошибки сети и таймауты
+            bot.infinity_polling(timeout=20, long_polling_timeout=20)
         except Exception as e:
             if "Conflict" in str(e):
-                logger.warning("⚠️ Конфликт 409. Ожидание 20 сек...")
+                logger.warning("⚠️ Конфликт процессов. Ожидание завершения старой копии...")
                 time.sleep(20)
             else:
-                logger.error(f"Ошибка Polling: {e}")
+                logger.error(f"Критическая ошибка: {e}")
                 time.sleep(5)
