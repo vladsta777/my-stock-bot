@@ -13,20 +13,24 @@ import time
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# 2. Мини-сервер для UptimeRobot
 app = Flask('')
 @app.route('/')
 def home(): return "Market Bot is Active", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
+    logger.info(f"Запуск веб-сервера на порту {port}")
     serve(app, host='0.0.0.0', port=port)
 
-# 2. Настройка бота
+# 3. Настройка бота
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
+# --- ФУНКЦИИ ДАННЫХ ---
+
 def get_ticker_info(ticker_symbol):
-    """Функция для поиска расширенных данных по тикеру"""
+    """Поиск данных по конкретному тикеру через yfinance"""
     try:
         ticker_symbol = ticker_symbol.upper().strip()
         stock = yf.Ticker(ticker_symbol)
@@ -42,7 +46,7 @@ def get_ticker_info(ticker_symbol):
         sector = info.get('sector', 'N/A')
         industry = info.get('industry', 'N/A')
         
-        emoji = "🟢" if change >= 0 else "🔴"
+        emoji = "🟢" if (change and change >= 0) else "🔴"
         
         text = (
             f"🔍 <b>{name} ({ticker_symbol})</b>\n"
@@ -56,24 +60,56 @@ def get_ticker_info(ticker_symbol):
         )
         return text
     except Exception as e:
-        logger.error(f"Ошибка поиска тикера {ticker_symbol}: {e}")
+        logger.error(f"Ошибка yfinance для {ticker_symbol}: {e}")
         return None
+
+def get_market_data(category):
+    """Парсинг таблиц лидеров с Yahoo Finance"""
+    try:
+        urls = {
+            "gainers": "https://finance.yahoo.com/markets/stocks/gainers/",
+            "losers": "https://finance.yahoo.com/markets/stocks/losers/",
+            "high": "https://finance.yahoo.com/markets/stocks/52-week-gainers/",
+            "low": "https://finance.yahoo.com/markets/stocks/52-week-losers/"
+        }
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        
+        dfs = pd.read_html(urls[category], storage_options=headers)
+        if not dfs: return "❌ Таблицы не найдены."
+        
+        df = dfs[0].head(10)
+        lines = []
+        for _, row in df.iterrows():
+            ticker = str(row['Symbol'])
+            price = row['Price']
+            change = row.get('52 Week % Change', row.get('% Change', row.get('Change', 'N/A')))
+            emoji = "🟢" if category in ["gainers", "high"] else "🔴"
+            lines.append(f"{emoji} <a href='https://finance.yahoo.com/quote/{ticker}'>{ticker:5}</a> | <b>${price}</b> (<code>{change}</code>)")
+
+        titles = {
+            "gainers": "🚀 <b>Top 10 Gainers (Daily)</b>",
+            "losers": "📉 <b>Top 10 Losers (Daily)</b>",
+            "high": "📈 <b>52 Week Gainers</b>",
+            "low": "🧊 <b>52 Week Losers</b>"
+        }
+        return f"{titles[category]}\n\n" + "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Ошибка парсинга {category}: {e}")
+        return "❌ <i>Данные временно недоступны.</i>"
+
+# --- ЛОГИКА МЕНЮ ---
 
 def get_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("🚀 Top Gainers", "📉 Top Losers")
     markup.row("📈 52 Week Gainers", "🧊 52 Week Losers")
-    markup.row("🔍 Поиск по тикеру") # НОВАЯ КНОПКА
+    markup.row("🔍 Поиск по тикеру")
     return markup
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.send_message(
-        message.chat.id, 
-        "📊 <b>Market Terminal v4.2</b>\n\nВыберите категорию анализа:", 
-        parse_mode="HTML", 
-        reply_markup=get_main_menu()
-    )
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v4.2</b>\n\nВыберите категорию или используйте поиск:", 
+                     parse_mode="HTML", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
 def handle_menu(message):
@@ -84,30 +120,24 @@ def handle_menu(message):
         "🧊 52 Week Losers": "low"
     }
     
-    # 1. Если нажали "Поиск"
     if message.text == "🔍 Поиск по тикеру":
-        msg = bot.send_message(message.chat.id, "✍️ <b>Введите тикер акции (например: AAPL, TSLA или NVDA):</b>", parse_mode="HTML")
-        # Регистрируем следующий шаг: бот будет ждать текст от юзера и передаст его в функцию process_ticker
-        bot.register_next_step_handler(msg, process_ticker)
-        
-    # 2. Если нажали одну из стандартных кнопок
+        msg = bot.send_message(message.chat.id, "✍️ <b>Введите тикер акции (напр. AAPL, NVDA, TSLA):</b>", parse_mode="HTML")
+        bot.register_next_step_handler(msg, process_ticker_step)
+    
     elif message.text in mapping:
-        from bot_logic import get_market_data # предполагаем, что функция парсинга там или в этом же файле
         status_msg = bot.send_message(message.chat.id, "⌛ <i>Загрузка данных...</i>", parse_mode="HTML")
-        # Для краткости здесь использую заглушку, вставьте вашу функцию get_market_data сюда
-        response = "Данные обновляются..." 
-        # (Используйте вашу функцию get_market_data как раньше)
+        response = get_market_data(mapping[message.text])
         bot.delete_message(message.chat.id, status_msg.message_id)
-        bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu())
-
+        bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
+    
     else:
-        bot.send_message(message.chat.id, "🔄 Пожалуйста, используйте кнопки меню:", reply_markup=get_main_menu())
+        bot.send_message(message.chat.id, "🔄 Используйте кнопки меню:", reply_markup=get_main_menu())
 
-def process_ticker(message):
-    """Обработка введенного тикера после нажатия кнопки Поиск"""
+def process_ticker_step(message):
+    """Шаг получения текста тикера от пользователя"""
     ticker = message.text.upper().strip()
     
-    # Если пользователь передумал и нажал другую кнопку меню вместо ввода тикера
+    # Если юзер вместо тикера нажал другую кнопку меню
     if ticker in ["🚀 TOP GAINERS", "📉 TOP LOSERS", "📈 52 WEEK GAINERS", "🧊 52 WEEK LOSERS", "🔍 ПОИСК ПО ТИКЕРУ"]:
         handle_menu(message)
         return
@@ -119,15 +149,31 @@ def process_ticker(message):
     if response:
         bot.send_message(message.chat.id, response, parse_mode="HTML", reply_markup=get_main_menu(), disable_web_page_preview=True)
     else:
-        bot.send_message(message.chat.id, f"❌ Тикер <b>{ticker}</b> не найден. Попробуйте еще раз или выберите категорию:", 
+        bot.send_message(message.chat.id, f"❌ Тикер <b>{ticker}</b> не найден. Проверьте правильность написания.", 
                          parse_mode="HTML", reply_markup=get_main_menu())
 
-# --- Запуск ---
+# --- ЗАПУСК ---
+
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
+    
+    logger.info(">>> Очистка сессий Telegram...")
     try:
         bot.remove_webhook(drop_pending_updates=True)
     except:
         bot.remove_webhook()
-    time.sleep(2)
-    bot.infinity_polling(timeout=60)
+        bot.get_updates(offset=-1)
+    
+    time.sleep(3)
+    logger.info(">>> Бот запущен!")
+    
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=1, timeout=60)
+        except Exception as e:
+            if "Conflict" in str(e):
+                logger.warning("⚠️ Конфликт 409. Ожидание 20 сек...")
+                time.sleep(20)
+            else:
+                logger.error(f"Ошибка Polling: {e}")
+                time.sleep(5)
