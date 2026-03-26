@@ -1,17 +1,14 @@
 import telebot
 from telebot import types
-import yfinance as yf
-import os
 import pandas as pd
+import os
 from flask import Flask
 from threading import Thread
 
-# 1. Настройка микро-сервера
+# 1. Мини-сервер для Render
 app = Flask('')
-
 @app.route('/')
-def home():
-    return "Бот Маркет-Терминал запущен"
+def home(): return "Market Bot is Running"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -23,7 +20,7 @@ bot = telebot.TeleBot(TOKEN)
 
 def get_market_data(category):
     try:
-        # Прямые ссылки на скринеры Yahoo Finance (весь рынок США)
+        # Прямые ссылки на разделы Yahoo Finance
         urls = {
             "gainers": "https://finance.yahoo.com/markets/stocks/gainers/",
             "losers": "https://finance.yahoo.com/markets/stocks/losers/",
@@ -31,47 +28,44 @@ def get_market_data(category):
             "low": "https://finance.yahoo.com/markets/stocks/52-week-lows/"
         }
         
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        
-        # Читаем таблицу
-        tables = pd.read_html(urls[category], storage_options={'User-Agent': 'Mozilla/5.0'})
-        df = tables[0].head(10) # Берем ТОП-10
+        # Эмуляция браузера, чтобы Yahoo не выдал ошибку 404/403
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+
+        # Читаем таблицу. [0] - это первая таблица на странице
+        dfs = pd.read_html(urls[category], storage_options=headers)
+        df = dfs[0].head(10) # Строго ТОП-10
 
         lines = []
         for _, row in df.iterrows():
-            ticker = str(row['Symbol'])
-            # Обработка цены (убираем лишние символы, если есть)
+            ticker = row['Symbol']
             price = row['Price']
-            change = row.get('% Change', row.get('Change', '0%'))
+            # Пробуем найти колонку с процентами (она может называться по-разному)
+            change = row.get('% Change', row.get('Change', 'N/A'))
             
             emoji = "🟢" if category in ["gainers", "high"] else "🔴"
-            lines.append(f"{emoji} <code>{ticker:5}</code>: <b>${price}</b> (<code>{change}</code>)")
+            lines.append(f"{emoji} <code>{ticker:5}</code> | <b>${price}</b> (<code>{change}</code>)")
 
-        title = {
-            "gainers": "🚀 <b>Top 10 Gainers (US)</b>",
-            "losers": "📉 <b>Top 10 Losers (US)</b>",
-            "high": "📈 <b>Top 10 New Highs</b>",
-            "low": "🧊 <b>Top 10 New Lows</b>"
-        }[category]
+        titles = {
+            "gainers": "🚀 <b>Top 10 Gainers (US Market)</b>",
+            "losers": "📉 <b>Top 10 Losers (US Market)</b>",
+            "high": "📈 <b>New 52W Highs</b>",
+            "low": "🧊 <b>New 52W Lows</b>"
+        }
 
-        return f"{title}\n\n" + "\n".join(lines)
+        return f"{titles[category]}\n\n" + "\n".join(lines)
 
     except Exception as e:
-        print(f"Ошибка парсинга: {e}")
-        return "❌ <i>Данные временно недоступны (Yahoo обновил структуру). Попробуйте позже.</i>"
+        print(f"Ошибка: {e}")
+        return "❌ <i>Yahoo временно ограничил доступ к таблицам. Попробуйте через 5 минут.</i>"
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(types.KeyboardButton("🚀 Top Gainers"), types.KeyboardButton("📉 Top Losers"))
-    markup.row(types.KeyboardButton("📈 New High"), types.KeyboardButton("📉 New Low"))
-    
-    bot.send_message(
-        message.chat.id, 
-        "<b>Market Terminal v2.0</b>\nДанные по всему рынку США (Топ-10):", 
-        parse_mode="HTML", 
-        reply_markup=markup
-    )
+    markup.row("🚀 Top Gainers", "📉 Top Losers")
+    markup.row("📈 New High", "📉 New Low")
+    bot.send_message(message.chat.id, "📊 <b>Market Terminal v3.0</b>\nДанные со всего рынка США:", parse_mode="HTML", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: True)
 def handle_menu(message):
@@ -82,11 +76,16 @@ def handle_menu(message):
         "📉 New Low": "low"
     }
     if message.text in mapping:
-        bot.send_message(message.chat.id, "⌛ <i>Запрашиваю биржевые таблицы...</i>", parse_mode="HTML")
-        bot.send_message(message.chat.id, get_market_data(mapping[message.text]), parse_mode="HTML")
+        # Отправляем временное сообщение, чтобы пользователь видел активность
+        status_msg = bot.send_message(message.chat.id, "⌛ <i>Скрейпинг таблиц Yahoo...</i>", parse_mode="HTML")
+        
+        response = get_market_data(mapping[message.text])
+        
+        # Удаляем "Загружаю..." и присылаем результат
+        bot.delete_message(message.chat.id, status_msg.message_id)
+        bot.send_message(message.chat.id, response, parse_mode="HTML")
 
 if __name__ == "__main__":
     t = Thread(target=run_flask)
     t.start()
-    print("Скрипт v2.0 (Scraper) запущен...")
     bot.infinity_polling()
